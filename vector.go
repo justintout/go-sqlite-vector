@@ -127,3 +127,16 @@ func BlobToFloat32(b []byte) ([]float32, error) {
 	}
 	return v, nil
 }
+
+func l2Squared(a, b []float32) float64 {
+	var sum float64
+	for i := range a {
+		d := float64(a[i]) - float64(b[i])
+		sum += d * d
+	}
+	return sum
+}
+
+func isQuantizedBlob(b []byte) bool {
+	return len(b) >= 2 && b[0] == 0x00 && b[1] == 0x01
+}

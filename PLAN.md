@@ -121,30 +121,30 @@ _(no failures)_
 ## Part 5: L2 Squared Distance (internal)
 
 ### Work
-- [ ] Implement unexported `l2Squared(a, b []float32) float64`
+- [x] Implement unexported `l2Squared(a, b []float32) float64`
   - Compute `sum((a[i] - b[i])^2)` using float64 accumulator for precision
-- [ ] Implement unexported `isQuantizedBlob(b []byte) bool`
+- [x] Implement unexported `isQuantizedBlob(b []byte) bool`
   - Returns true if `len(b) >= 2 && b[0] == 0x00 && b[1] == 0x01`
 
 ### Validation
-- [ ] Unit tests for `l2Squared`:
+- [x] Unit tests for `l2Squared`:
   - Identical vectors → 0.0
   - Known values: `l2Squared([1,0,0], [0,1,0])` == 2.0
   - Known values: `l2Squared([1,2,3], [4,5,6])` == 27.0
   - Single dimension: `l2Squared([3], [7])` == 16.0
-- [ ] Unit tests for `isQuantizedBlob`:
+- [x] Unit tests for `isQuantizedBlob`:
   - `[]byte{0x00, 0x01, ...}` → true
   - `[]byte{0x00, 0x00, ...}` → false
   - Float32 blob → false
   - Empty/short slices → false
-- [ ] `go test ./...` passes
-- [ ] `go vet ./...` passes
+- [x] `go test ./...` passes
+- [x] `go vet ./...` passes
 
 ### Failure Log
-_(record any validation failures here before fixing)_
+_(no failures)_
 
 ### Commit
-- [ ] Commit: "implement l2Squared distance and blob format detection"
+- [x] Commit: "implement l2Squared distance and blob format detection"
 
 ---
 

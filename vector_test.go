@@ -297,3 +297,91 @@ func TestVectorEncode(t *testing.T) {
 		}
 	})
 }
+
+func TestL2Squared(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []float32
+		want float64
+	}{
+		{
+			name: "identical vectors",
+			a:    []float32{1, 2, 3},
+			b:    []float32{1, 2, 3},
+			want: 0.0,
+		},
+		{
+			name: "unit vectors",
+			a:    []float32{1, 0, 0},
+			b:    []float32{0, 1, 0},
+			want: 2.0,
+		},
+		{
+			name: "known values 1-2-3 vs 4-5-6",
+			a:    []float32{1, 2, 3},
+			b:    []float32{4, 5, 6},
+			want: 27.0,
+		},
+		{
+			name: "single dimension",
+			a:    []float32{3},
+			b:    []float32{7},
+			want: 16.0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := l2Squared(tt.a, tt.b)
+			if got != tt.want {
+				t.Errorf("l2Squared(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsQuantizedBlob(t *testing.T) {
+	tests := []struct {
+		name string
+		b    []byte
+		want bool
+	}{
+		{
+			name: "quantized blob",
+			b:    []byte{0x00, 0x01, 0x7f, 0x80},
+			want: true,
+		},
+		{
+			name: "wrong version byte",
+			b:    []byte{0x00, 0x00, 0x7f},
+			want: false,
+		},
+		{
+			name: "float32 blob",
+			b:    Float32ToBlob([]float32{1.0}),
+			want: false,
+		},
+		{
+			name: "empty",
+			b:    []byte{},
+			want: false,
+		},
+		{
+			name: "single byte",
+			b:    []byte{0x00},
+			want: false,
+		},
+		{
+			name: "just magic bytes",
+			b:    []byte{0x00, 0x01},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isQuantizedBlob(tt.b)
+			if got != tt.want {
+				t.Errorf("isQuantizedBlob(%v) = %v, want %v", tt.b, got, tt.want)
+			}
+		})
+	}
+}
