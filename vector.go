@@ -73,7 +73,24 @@ func Register(conn *sqlite.Conn, dim int, opts ...Option) error {
 		NArgs:         2,
 		Deterministic: true,
 		Scalar: func(ctx sqlite.Context, args []sqlite.Value) (sqlite.Value, error) {
-			return sqlite.Value{}, fmt.Errorf("vector_distance: not implemented")
+			if args[0].Type() == sqlite.TypeNull || args[1].Type() == sqlite.TypeNull {
+				return sqlite.Value{}, nil
+			}
+			blobA := args[0].Blob()
+			blobB := args[1].Blob()
+			if isQuantizedBlob(blobA) || isQuantizedBlob(blobB) {
+				return sqlite.Value{}, fmt.Errorf("vector_distance: input is quantized, use vector_distance_q")
+			}
+			expected := cfg.dim * 4
+			if len(blobA) != expected {
+				return sqlite.Value{}, fmt.Errorf("vector_distance: expected %d bytes (dim=%d), got %d", expected, cfg.dim, len(blobA))
+			}
+			if len(blobB) != expected {
+				return sqlite.Value{}, fmt.Errorf("vector_distance: expected %d bytes (dim=%d), got %d", expected, cfg.dim, len(blobB))
+			}
+			a, _ := BlobToFloat32(blobA)
+			b, _ := BlobToFloat32(blobB)
+			return sqlite.FloatValue(l2Squared(a, b)), nil
 		},
 	})
 	if err != nil {

@@ -385,3 +385,115 @@ func TestIsQuantizedBlob(t *testing.T) {
 		})
 	}
 }
+
+func TestVectorDistance(t *testing.T) {
+	t.Run("identical vectors distance is 0", func(t *testing.T) {
+		conn := openTestConn(t)
+		if err := Register(conn, 3); err != nil {
+			t.Fatal(err)
+		}
+		var dist float64
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance(vector_encode('[1,2,3]'), vector_encode('[1,2,3]'))",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					dist = stmt.ColumnFloat(0)
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dist != 0.0 {
+			t.Errorf("distance of identical vectors = %v, want 0.0", dist)
+		}
+	})
+
+	t.Run("known distance 27.0", func(t *testing.T) {
+		conn := openTestConn(t)
+		if err := Register(conn, 3); err != nil {
+			t.Fatal(err)
+		}
+		var dist float64
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance(vector_encode('[1,2,3]'), vector_encode('[4,5,6]'))",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					dist = stmt.ColumnFloat(0)
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dist != 27.0 {
+			t.Errorf("distance = %v, want 27.0", dist)
+		}
+	})
+
+	t.Run("wrong dimension blob error", func(t *testing.T) {
+		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
+		conn := openTestConn(t)
+		if err := Register(conn, 3); err != nil {
+			t.Fatal(err)
+		}
+		// Bind a 2-element blob (8 bytes) where 3*4=12 is expected
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance(vector_encode('[1,2,3]'), ?1)",
+			&sqlitex.ExecOptions{
+				Args: []any{Float32ToBlob([]float32{1, 2})},
+			})
+		if err == nil {
+			t.Fatal("expected error for wrong dimension blob")
+		}
+	})
+
+	t.Run("quantized blob input error", func(t *testing.T) {
+		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
+		conn := openTestConn(t)
+		if err := Register(conn, 3); err != nil {
+			t.Fatal(err)
+		}
+		quantBlob := []byte{0x00, 0x01, 0x10, 0x20, 0x30}
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance(vector_encode('[1,2,3]'), ?1)",
+			&sqlitex.ExecOptions{
+				Args: []any{quantBlob},
+			})
+		if err == nil {
+			t.Fatal("expected error for quantized blob input")
+		}
+	})
+
+	t.Run("NULL inputs return NULL", func(t *testing.T) {
+		conn := openTestConn(t)
+		if err := Register(conn, 3); err != nil {
+			t.Fatal(err)
+		}
+		tests := []struct {
+			name  string
+			query string
+		}{
+			{"both NULL", "SELECT vector_distance(NULL, NULL)"},
+			{"first NULL", "SELECT vector_distance(NULL, vector_encode('[1,2,3]'))"},
+			{"second NULL", "SELECT vector_distance(vector_encode('[1,2,3]'), NULL)"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				var isNull bool
+				err := sqlitex.ExecuteTransient(conn, tt.query, &sqlitex.ExecOptions{
+					ResultFunc: func(stmt *sqlite.Stmt) error {
+						isNull = stmt.ColumnType(0) == sqlite.TypeNull
+						return nil
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !isNull {
+					t.Fatal("expected NULL result")
+				}
+			})
+		}
+	})
+}
