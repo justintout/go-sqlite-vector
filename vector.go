@@ -5,6 +5,7 @@ package vector
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 
@@ -46,7 +47,22 @@ func Register(conn *sqlite.Conn, dim int, opts ...Option) error {
 		NArgs:         1,
 		Deterministic: true,
 		Scalar: func(ctx sqlite.Context, args []sqlite.Value) (sqlite.Value, error) {
-			return sqlite.Value{}, fmt.Errorf("vector_encode: not implemented")
+			if args[0].Type() == sqlite.TypeNull {
+				return sqlite.Value{}, nil
+			}
+			text := args[0].Text()
+			var nums []float64
+			if err := json.Unmarshal([]byte(text), &nums); err != nil {
+				return sqlite.Value{}, fmt.Errorf("vector_encode: invalid JSON: %v", err)
+			}
+			if len(nums) != cfg.dim {
+				return sqlite.Value{}, fmt.Errorf("vector_encode: expected dimension %d, got %d", cfg.dim, len(nums))
+			}
+			floats := make([]float32, len(nums))
+			for i, n := range nums {
+				floats[i] = float32(n)
+			}
+			return sqlite.BlobValue(Float32ToBlob(floats)), nil
 		},
 	})
 	if err != nil {
