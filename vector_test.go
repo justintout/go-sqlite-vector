@@ -3,7 +3,20 @@ package vector
 import (
 	"bytes"
 	"testing"
+
+	"zombiezen.com/go/sqlite"
+	"zombiezen.com/go/sqlite/sqlitex"
 )
+
+func openTestConn(t *testing.T) *sqlite.Conn {
+	t.Helper()
+	conn, err := sqlite.OpenConn(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
 
 func TestFloat32ToBlob(t *testing.T) {
 	tests := []struct {
@@ -109,4 +122,52 @@ func TestBlobRoundTrip(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRegister(t *testing.T) {
+	t.Run("dim 0 returns error", func(t *testing.T) {
+		conn := openTestConn(t)
+		err := Register(conn, 0)
+		if err == nil {
+			t.Fatal("expected error for dim=0, got nil")
+		}
+	})
+
+	t.Run("dim 3 succeeds", func(t *testing.T) {
+		conn := openTestConn(t)
+		err := Register(conn, 3)
+		if err != nil {
+			t.Fatalf("Register(dim=3) error: %v", err)
+		}
+	})
+
+	t.Run("with WithQuantRange succeeds", func(t *testing.T) {
+		conn := openTestConn(t)
+		err := Register(conn, 3, WithQuantRange(-1, 1))
+		if err != nil {
+			t.Fatalf("Register with WithQuantRange error: %v", err)
+		}
+	})
+
+	t.Run("stub functions return error", func(t *testing.T) {
+		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable, preventing SQL error propagation")
+		conn := openTestConn(t)
+		if err := Register(conn, 3); err != nil {
+			t.Fatal(err)
+		}
+		err := sqlitex.ExecuteTransient(conn, "SELECT vector_encode('[1,2,3]')", nil)
+		if err == nil {
+			t.Fatal("expected stub error from vector_encode, got nil")
+		}
+	})
+
+	t.Run("re-register overwrites without error", func(t *testing.T) {
+		conn := openTestConn(t)
+		if err := Register(conn, 3); err != nil {
+			t.Fatal(err)
+		}
+		if err := Register(conn, 4); err != nil {
+			t.Fatalf("second Register call error: %v", err)
+		}
+	})
 }

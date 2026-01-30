@@ -7,7 +7,87 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+
+	"zombiezen.com/go/sqlite"
 )
+
+type config struct {
+	dim          int
+	quantMin     float32
+	quantMax     float32
+	quantEnabled bool
+}
+
+// Option configures vector function registration.
+type Option func(*config)
+
+// WithQuantRange enables quantization and sets the global min/max range
+// for scalar int8 mapping.
+func WithQuantRange(min, max float32) Option {
+	return func(c *config) {
+		c.quantMin = min
+		c.quantMax = max
+		c.quantEnabled = true
+	}
+}
+
+// Register registers all SQL functions on the given connection for vectors
+// of dimension dim. Returns an error if dim < 1.
+func Register(conn *sqlite.Conn, dim int, opts ...Option) error {
+	if dim < 1 {
+		return fmt.Errorf("vector: dimension must be >= 1, got %d", dim)
+	}
+	cfg := &config{dim: dim}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	err := conn.CreateFunction("vector_encode", &sqlite.FunctionImpl{
+		NArgs:         1,
+		Deterministic: true,
+		Scalar: func(ctx sqlite.Context, args []sqlite.Value) (sqlite.Value, error) {
+			return sqlite.Value{}, fmt.Errorf("vector_encode: not implemented")
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	err = conn.CreateFunction("vector_distance", &sqlite.FunctionImpl{
+		NArgs:         2,
+		Deterministic: true,
+		Scalar: func(ctx sqlite.Context, args []sqlite.Value) (sqlite.Value, error) {
+			return sqlite.Value{}, fmt.Errorf("vector_distance: not implemented")
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	err = conn.CreateFunction("vector_quantize", &sqlite.FunctionImpl{
+		NArgs:         1,
+		Deterministic: true,
+		Scalar: func(ctx sqlite.Context, args []sqlite.Value) (sqlite.Value, error) {
+			return sqlite.Value{}, fmt.Errorf("vector_quantize: not implemented")
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	err = conn.CreateFunction("vector_distance_q", &sqlite.FunctionImpl{
+		NArgs:         2,
+		Deterministic: true,
+		Scalar: func(ctx sqlite.Context, args []sqlite.Value) (sqlite.Value, error) {
+			return sqlite.Value{}, fmt.Errorf("vector_distance_q: not implemented")
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
 
 // Float32ToBlob converts a []float32 to a little-endian byte slice suitable
 // for storage as a SQLite blob.
