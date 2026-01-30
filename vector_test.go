@@ -582,3 +582,120 @@ func TestDequantize(t *testing.T) {
 		}
 	})
 }
+
+func TestVectorQuantize(t *testing.T) {
+	t.Run("produces correct quantized blob", func(t *testing.T) {
+		conn := openTestConn(t)
+		if err := Register(conn, 3, WithQuantRange(-1, 1)); err != nil {
+			t.Fatal(err)
+		}
+		var blob []byte
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_quantize(vector_encode('[0.5, -0.5, 0.0]'))",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					r := stmt.ColumnReader(0)
+					b, err := io.ReadAll(r)
+					if err != nil {
+						return err
+					}
+					blob = b
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(blob) != 5 {
+			t.Fatalf("blob length = %d, want 5", len(blob))
+		}
+		if blob[0] != 0x00 || blob[1] != 0x01 {
+			t.Fatalf("magic bytes = [%#x, %#x], want [0x00, 0x01]", blob[0], blob[1])
+		}
+	})
+
+	t.Run("without WithQuantRange returns error", func(t *testing.T) {
+		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
+		conn := openTestConn(t)
+		if err := Register(conn, 3); err != nil {
+			t.Fatal(err)
+		}
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_quantize(vector_encode('[0.5, -0.5, 0.0]'))", nil)
+		if err == nil {
+			t.Fatal("expected error when quantization not configured")
+		}
+	})
+
+	t.Run("wrong dimension input error", func(t *testing.T) {
+		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
+		conn := openTestConn(t)
+		if err := Register(conn, 3, WithQuantRange(-1, 1)); err != nil {
+			t.Fatal(err)
+		}
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_quantize(?1)",
+			&sqlitex.ExecOptions{
+				Args: []any{Float32ToBlob([]float32{1, 2})},
+			})
+		if err == nil {
+			t.Fatal("expected error for wrong dimension")
+		}
+	})
+
+	t.Run("NULL input returns NULL", func(t *testing.T) {
+		conn := openTestConn(t)
+		if err := Register(conn, 3, WithQuantRange(-1, 1)); err != nil {
+			t.Fatal(err)
+		}
+		var isNull bool
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_quantize(NULL)",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					isNull = stmt.ColumnType(0) == sqlite.TypeNull
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isNull {
+			t.Fatal("expected NULL result for NULL input")
+		}
+	})
+
+	t.Run("out-of-range values are clamped", func(t *testing.T) {
+		conn := openTestConn(t)
+		if err := Register(conn, 3, WithQuantRange(-1, 1)); err != nil {
+			t.Fatal(err)
+		}
+		var blob []byte
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_quantize(vector_encode('[5.0, -5.0, 0.0]'))",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					r := stmt.ColumnReader(0)
+					b, err := io.ReadAll(r)
+					if err != nil {
+						return err
+					}
+					blob = b
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Values should be clamped, not error
+		if len(blob) != 5 {
+			t.Fatalf("blob length = %d, want 5", len(blob))
+		}
+		if int8(blob[2]) != 127 {
+			t.Errorf("clamped 5.0 = %d, want 127", int8(blob[2]))
+		}
+		if int8(blob[3]) != -128 {
+			t.Errorf("clamped -5.0 = %d, want -128", int8(blob[3]))
+		}
+	})
+}

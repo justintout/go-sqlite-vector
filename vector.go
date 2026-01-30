@@ -101,7 +101,19 @@ func Register(conn *sqlite.Conn, dim int, opts ...Option) error {
 		NArgs:         1,
 		Deterministic: true,
 		Scalar: func(ctx sqlite.Context, args []sqlite.Value) (sqlite.Value, error) {
-			return sqlite.Value{}, fmt.Errorf("vector_quantize: not implemented")
+			if args[0].Type() == sqlite.TypeNull {
+				return sqlite.Value{}, nil
+			}
+			if !cfg.quantEnabled {
+				return sqlite.Value{}, fmt.Errorf("vector_quantize: quantization not configured, call Register with WithQuantRange")
+			}
+			blob := args[0].Blob()
+			expected := cfg.dim * 4
+			if len(blob) != expected {
+				return sqlite.Value{}, fmt.Errorf("vector_quantize: expected %d bytes (dim=%d), got %d", expected, cfg.dim, len(blob))
+			}
+			floats, _ := BlobToFloat32(blob)
+			return sqlite.BlobValue(quantize(floats, cfg.quantMin, cfg.quantMax)), nil
 		},
 	})
 	if err != nil {
