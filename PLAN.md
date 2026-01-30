@@ -9,23 +9,23 @@ Status legend: `[ ]` pending | `[~]` in progress | `[x]` complete | `[!]` failed
 ## Part 1: Project Scaffolding
 
 ### Work
-- [ ] Run `go mod init github.com/justintout/go-sqlite-vector`
-- [ ] Run `go get zombiezen.com/go/sqlite`
-- [ ] Create `LICENSE` file (BSD-3-Clause)
-- [ ] Create `vector.go` with package declaration and doc comment
-- [ ] Create `vector_test.go` with package declaration
+- [x] Run `go mod init github.com/justintout/go-sqlite-vector`
+- [x] Run `go get zombiezen.com/go/sqlite`
+- [x] Create `LICENSE` file (BSD-3-Clause)
+- [x] Create `vector.go` with package declaration and doc comment
+- [x] Create `vector_test.go` with package declaration
 
 ### Validation
-- [ ] `go build ./...` succeeds
-- [ ] `go vet ./...` succeeds
-- [ ] `go test ./...` runs (no tests yet, but no errors)
-- [ ] `go mod tidy` produces no changes
+- [x] `go build ./...` succeeds
+- [x] `go vet ./...` succeeds
+- [x] `go test ./...` runs (no tests yet, but no errors)
+- [x] `go mod tidy` produces no changes
 
 ### Failure Log
-_(record any validation failures here before fixing)_
+_(no failures)_
 
 ### Commit
-- [ ] Commit: "scaffold project with go module and license"
+- [x] Commit: "scaffold project with go module and license"
 
 ---
 
