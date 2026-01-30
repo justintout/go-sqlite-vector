@@ -183,35 +183,35 @@ _(no failures)_
 ## Part 7: Quantization (internal)
 
 ### Work
-- [ ] Implement unexported `quantize(v []float32, min, max float32) []byte`
+- [x] Implement unexported `quantize(v []float32, min, max float32) []byte`
   - Allocate `2 + len(v)` bytes
   - Write magic bytes `0x00, 0x01`
   - For each float: `clamp(round((v - min) / (max - min) * 255 - 128), -128, 127)`
   - Write as signed int8
-- [ ] Implement unexported `dequantize(b []byte, min, max float32) ([]float32, error)`
+- [x] Implement unexported `dequantize(b []byte, min, max float32) ([]float32, error)`
   - Validate magic bytes; return error if missing
   - For each int8: `(q + 128) / 255 * (max - min) + min`
   - Return `[]float32`
 
 ### Validation
-- [ ] Unit tests for `quantize`:
+- [x] Unit tests for `quantize`:
   - Known values with range [-1, 1]: value 0.0 → int8 value near 0 (middle of range)
   - Boundary: value == min → -128, value == max → 127
   - Out-of-range clamping: value > max → 127, value < min → -128
   - Output blob starts with `0x00, 0x01`
   - Output blob length == `2 + dim`
-- [ ] Unit tests for `dequantize`:
+- [x] Unit tests for `dequantize`:
   - Round-trip: `dequantize(quantize(v))` is approximately equal to `v` (within int8 precision)
   - Missing magic bytes → error
   - Correct output length == input length - 2
-- [ ] `go test ./...` passes
-- [ ] `go vet ./...` passes
+- [x] `go test ./...` passes
+- [x] `go vet ./...` passes
 
 ### Failure Log
-_(record any validation failures here before fixing)_
+_(no failures)_
 
 ### Commit
-- [ ] Commit: "implement scalar int8 quantization and dequantization"
+- [x] Commit: "implement scalar int8 quantization and dequantization"
 
 ---
 

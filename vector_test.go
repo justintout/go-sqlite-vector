@@ -497,3 +497,88 @@ func TestVectorDistance(t *testing.T) {
 		}
 	})
 }
+
+func TestQuantize(t *testing.T) {
+	t.Run("boundary values", func(t *testing.T) {
+		b := quantize([]float32{-1.0, 1.0, 0.0}, -1.0, 1.0)
+		if len(b) != 5 {
+			t.Fatalf("output length = %d, want 5", len(b))
+		}
+		if b[0] != 0x00 || b[1] != 0x01 {
+			t.Fatalf("magic bytes = [%#x, %#x], want [0x00, 0x01]", b[0], b[1])
+		}
+		// min → -128, max → 127, mid → ~0
+		if int8(b[2]) != -128 {
+			t.Errorf("quantize(-1.0) = %d, want -128", int8(b[2]))
+		}
+		if int8(b[3]) != 127 {
+			t.Errorf("quantize(1.0) = %d, want 127", int8(b[3]))
+		}
+		mid := int8(b[4])
+		if mid < -1 || mid > 0 {
+			t.Errorf("quantize(0.0) = %d, want near 0", mid)
+		}
+	})
+
+	t.Run("out-of-range clamping", func(t *testing.T) {
+		b := quantize([]float32{-5.0, 5.0}, -1.0, 1.0)
+		if int8(b[2]) != -128 {
+			t.Errorf("quantize(-5.0) = %d, want -128 (clamped)", int8(b[2]))
+		}
+		if int8(b[3]) != 127 {
+			t.Errorf("quantize(5.0) = %d, want 127 (clamped)", int8(b[3]))
+		}
+	})
+
+	t.Run("output format", func(t *testing.T) {
+		b := quantize([]float32{0.5, -0.5, 0.0}, -1.0, 1.0)
+		if !isQuantizedBlob(b) {
+			t.Fatal("output is not recognized as quantized blob")
+		}
+		if len(b) != 5 {
+			t.Errorf("output length = %d, want 5 (2 header + 3 values)", len(b))
+		}
+	})
+}
+
+func TestDequantize(t *testing.T) {
+	t.Run("round-trip approximate equality", func(t *testing.T) {
+		original := []float32{0.5, -0.3, 0.0, 1.0, -1.0}
+		qblob := quantize(original, -1.0, 1.0)
+		got, err := dequantize(qblob, -1.0, 1.0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(original) {
+			t.Fatalf("dequantize length = %d, want %d", len(got), len(original))
+		}
+		for i := range got {
+			diff := got[i] - original[i]
+			if diff < 0 {
+				diff = -diff
+			}
+			// int8 precision: max error is (max-min)/255 ≈ 0.0078 for range [-1,1]
+			if diff > 0.01 {
+				t.Errorf("round-trip[%d]: got %v, want ~%v (diff=%v)", i, got[i], original[i], diff)
+			}
+		}
+	})
+
+	t.Run("missing magic bytes error", func(t *testing.T) {
+		_, err := dequantize([]byte{0x01, 0x02, 0x03}, -1.0, 1.0)
+		if err == nil {
+			t.Fatal("expected error for missing magic bytes")
+		}
+	})
+
+	t.Run("correct output length", func(t *testing.T) {
+		qblob := quantize([]float32{0.1, 0.2, 0.3}, -1.0, 1.0)
+		got, err := dequantize(qblob, -1.0, 1.0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 3 {
+			t.Errorf("output length = %d, want 3", len(got))
+		}
+	})
+}

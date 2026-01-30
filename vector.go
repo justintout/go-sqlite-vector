@@ -157,3 +157,35 @@ func l2Squared(a, b []float32) float64 {
 func isQuantizedBlob(b []byte) bool {
 	return len(b) >= 2 && b[0] == 0x00 && b[1] == 0x01
 }
+
+func quantize(v []float32, min, max float32) []byte {
+	b := make([]byte, 2+len(v))
+	b[0] = 0x00
+	b[1] = 0x01
+	r := max - min
+	for i, f := range v {
+		normalized := (f - min) / r * 255
+		q := math.Round(float64(normalized)) - 128
+		if q < -128 {
+			q = -128
+		} else if q > 127 {
+			q = 127
+		}
+		b[2+i] = byte(int8(q))
+	}
+	return b
+}
+
+func dequantize(b []byte, min, max float32) ([]float32, error) {
+	if len(b) < 2 || b[0] != 0x00 || b[1] != 0x01 {
+		return nil, fmt.Errorf("dequantize: missing quantized format magic bytes")
+	}
+	data := b[2:]
+	r := float64(max - min)
+	v := make([]float32, len(data))
+	for i, raw := range data {
+		q := int8(raw)
+		v[i] = float32((float64(q)+128)/255*r + float64(min))
+	}
+	return v, nil
+}
