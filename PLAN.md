@@ -305,8 +305,8 @@ _(no failures)_
 ## Part 11: Benchmarks
 
 ### Work
-- [ ] Create `bench_test.go`
-- [ ] Implement benchmarks using pre-allocated random vectors:
+- [x] Create `bench_test.go`
+- [x] Implement benchmarks using pre-allocated random vectors:
   - `BenchmarkL2Distance/dim=384`
   - `BenchmarkL2Distance/dim=768`
   - `BenchmarkL2Distance/dim=1536`
@@ -319,19 +319,19 @@ _(no failures)_
   - `BenchmarkVectorEncode/dim=384`
   - `BenchmarkVectorEncode/dim=768`
   - `BenchmarkVectorEncode/dim=1536`
-- [ ] Each benchmark uses `b.ResetTimer()` after setup and `b.ReportAllocs()`
+- [x] Each benchmark uses `b.ResetTimer()` after setup and `b.ReportAllocs()`
 
 ### Validation
-- [ ] `go test -bench=. -benchmem ./...` runs without errors
-- [ ] All benchmarks produce non-zero ns/op values
-- [ ] `go test ./...` still passes (benchmarks don't break tests)
-- [ ] `go vet ./...` passes
+- [x] `go test -bench=. -benchmem ./...` runs without errors
+- [x] All benchmarks produce non-zero ns/op values
+- [x] `go test ./...` still passes (benchmarks don't break tests)
+- [x] `go vet ./...` passes
 
 ### Failure Log
-_(record any validation failures here before fixing)_
+_(no failures)_
 
 ### Commit
-- [ ] Commit: "add benchmarks for core operations"
+- [x] Commit: "add benchmarks for core operations"
 
 ---
 
