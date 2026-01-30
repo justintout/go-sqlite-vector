@@ -32,26 +32,26 @@ _(no failures)_
 ## Part 2: Blob Encoding (Float32ToBlob, BlobToFloat32)
 
 ### Work
-- [ ] Implement `Float32ToBlob(v []float32) []byte` in `vector.go`
+- [x] Implement `Float32ToBlob(v []float32) []byte` in `vector.go`
   - Little-endian encoding via `encoding/binary`
-- [ ] Implement `BlobToFloat32(b []byte) ([]float32, error)` in `vector.go`
+- [x] Implement `BlobToFloat32(b []byte) ([]float32, error)` in `vector.go`
   - Return error if `len(b) % 4 != 0`
   - Little-endian decoding via `encoding/binary`
 
 ### Validation
-- [ ] Write table-driven tests in `vector_test.go`:
+- [x] Write table-driven tests in `vector_test.go`:
   - Round-trip: `BlobToFloat32(Float32ToBlob(v))` == `v` for several vectors
   - `BlobToFloat32` with invalid length returns error
   - Empty slice round-trips correctly
   - Known byte values: `Float32ToBlob([]float32{1.0})` == `[]byte{0x00, 0x00, 0x80, 0x3f}`
-- [ ] `go test ./...` passes
-- [ ] `go vet ./...` passes
+- [x] `go test ./...` passes
+- [x] `go vet ./...` passes
 
 ### Failure Log
-_(record any validation failures here before fixing)_
+_(no failures)_
 
 ### Commit
-- [ ] Commit: "implement Float32ToBlob and BlobToFloat32"
+- [x] Commit: "implement Float32ToBlob and BlobToFloat32"
 
 ---
 
