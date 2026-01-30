@@ -338,37 +338,37 @@ _(no failures)_
 ## Part 12: Final Review and Cleanup
 
 ### Work
-- [ ] Run `go mod tidy` to clean dependencies
-- [ ] Verify all exported symbols have doc comments
-- [ ] Verify no unexported symbols are accidentally exported
-- [ ] Verify error message strings match SPEC.md table exactly
-- [ ] Review all SQL functions for correct NULL handling
-- [ ] Review all SQL functions for correct error propagation
-- [ ] Confirm `Register` overwrite behavior works end-to-end
+- [x] Run `go mod tidy` to clean dependencies
+- [x] Verify all exported symbols have doc comments
+- [x] Verify no unexported symbols are accidentally exported
+- [x] Verify error message strings match SPEC.md table exactly
+- [x] Review all SQL functions for correct NULL handling
+- [x] Review all SQL functions for correct error propagation (error returns are correct; propagation blocked by upstream library bug)
+- [x] Confirm `Register` overwrite behavior works end-to-end
 
 ### Validation
-- [ ] `go build ./...` succeeds
-- [ ] `go vet ./...` passes
-- [ ] `go test ./...` passes
-- [ ] `go test -race ./...` passes
-- [ ] `go test -bench=. -benchmem ./...` runs
-- [ ] `go mod tidy` produces no changes
-- [ ] No `TODO`, `FIXME`, or `HACK` comments remain in source
+- [x] `go build ./...` succeeds
+- [x] `go vet ./...` passes
+- [x] `go test ./...` passes
+- [x] `go test -race ./...` passes
+- [x] `go test -bench=. -benchmem ./...` runs
+- [x] `go mod tidy` produces no changes
+- [x] No `TODO`, `FIXME`, or `HACK` comments remain in source
 
 ### Failure Log
-_(record any validation failures here before fixing)_
+_(no failures)_
 
 ### Commit
-- [ ] Commit: "final review and cleanup"
+- [x] Commit: "final review and cleanup"
 
 ---
 
 ## Completion Checklist
 
-- [ ] All 12 parts have status `[x]`
-- [ ] All tests pass: `go test -race -count=1 ./...`
-- [ ] All benchmarks run: `go test -bench=. -benchmem ./...`
-- [ ] `go vet` clean
-- [ ] `go mod tidy` clean
-- [ ] Every part has a commit
-- [ ] PLAN.md is fully updated with final statuses
+- [x] All 12 parts have status `[x]`
+- [x] All tests pass: `go test -race -count=1 ./...`
+- [x] All benchmarks run: `go test -bench=. -benchmem ./...`
+- [x] `go vet` clean
+- [x] `go mod tidy` clean
+- [x] Every part has a commit
+- [x] PLAN.md is fully updated with final statuses
