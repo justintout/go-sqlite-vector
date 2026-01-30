@@ -699,3 +699,143 @@ func TestVectorQuantize(t *testing.T) {
 		}
 	})
 }
+
+func TestVectorDistanceQ(t *testing.T) {
+	t.Run("identical quantized vectors distance near 0", func(t *testing.T) {
+		conn := openTestConn(t)
+		if err := Register(conn, 3, WithQuantRange(-1, 1)); err != nil {
+			t.Fatal(err)
+		}
+		var dist float64
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance_q(vector_quantize(vector_encode('[0.5, -0.5, 0.0]')), vector_quantize(vector_encode('[0.5, -0.5, 0.0]')))",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					dist = stmt.ColumnFloat(0)
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dist < 0 || dist > 0.001 {
+			t.Errorf("distance of identical quantized vectors = %v, want near 0", dist)
+		}
+	})
+
+	t.Run("ordering preserved vs float32", func(t *testing.T) {
+		conn := openTestConn(t)
+		if err := Register(conn, 3, WithQuantRange(-1, 1)); err != nil {
+			t.Fatal(err)
+		}
+		// Get float32 distances
+		var distFloat1, distFloat2 float64
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance(vector_encode('[0.1, 0.2, 0.3]'), vector_encode('[0.4, 0.5, 0.6]'))",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					distFloat1 = stmt.ColumnFloat(0)
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance(vector_encode('[0.1, 0.2, 0.3]'), vector_encode('[0.9, -0.9, 0.9]'))",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					distFloat2 = stmt.ColumnFloat(0)
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Get quantized distances
+		var distQ1, distQ2 float64
+		err = sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance_q(vector_quantize(vector_encode('[0.1, 0.2, 0.3]')), vector_quantize(vector_encode('[0.4, 0.5, 0.6]')))",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					distQ1 = stmt.ColumnFloat(0)
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance_q(vector_quantize(vector_encode('[0.1, 0.2, 0.3]')), vector_quantize(vector_encode('[0.9, -0.9, 0.9]')))",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					distQ2 = stmt.ColumnFloat(0)
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify ordering is preserved
+		if (distFloat1 < distFloat2) != (distQ1 < distQ2) {
+			t.Errorf("ordering not preserved: float(%v < %v) vs quant(%v < %v)",
+				distFloat1, distFloat2, distQ1, distQ2)
+		}
+	})
+
+	t.Run("non-quantized blob input error", func(t *testing.T) {
+		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
+		conn := openTestConn(t)
+		if err := Register(conn, 3, WithQuantRange(-1, 1)); err != nil {
+			t.Fatal(err)
+		}
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance_q(vector_encode('[1,2,3]'), vector_quantize(vector_encode('[1,2,3]')))", nil)
+		if err == nil {
+			t.Fatal("expected error for non-quantized blob input")
+		}
+	})
+
+	t.Run("without WithQuantRange returns error", func(t *testing.T) {
+		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
+		conn := openTestConn(t)
+		if err := Register(conn, 3); err != nil {
+			t.Fatal(err)
+		}
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance_q(?1, ?2)",
+			&sqlitex.ExecOptions{
+				Args: []any{
+					[]byte{0x00, 0x01, 0x10, 0x20, 0x30},
+					[]byte{0x00, 0x01, 0x10, 0x20, 0x30},
+				},
+			})
+		if err == nil {
+			t.Fatal("expected error when quantization not configured")
+		}
+	})
+
+	t.Run("NULL inputs return NULL", func(t *testing.T) {
+		conn := openTestConn(t)
+		if err := Register(conn, 3, WithQuantRange(-1, 1)); err != nil {
+			t.Fatal(err)
+		}
+		var isNull bool
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT vector_distance_q(NULL, NULL)",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					isNull = stmt.ColumnType(0) == sqlite.TypeNull
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isNull {
+			t.Fatal("expected NULL result")
+		}
+	})
+}

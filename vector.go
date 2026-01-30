@@ -124,7 +124,30 @@ func Register(conn *sqlite.Conn, dim int, opts ...Option) error {
 		NArgs:         2,
 		Deterministic: true,
 		Scalar: func(ctx sqlite.Context, args []sqlite.Value) (sqlite.Value, error) {
-			return sqlite.Value{}, fmt.Errorf("vector_distance_q: not implemented")
+			if args[0].Type() == sqlite.TypeNull || args[1].Type() == sqlite.TypeNull {
+				return sqlite.Value{}, nil
+			}
+			if !cfg.quantEnabled {
+				return sqlite.Value{}, fmt.Errorf("vector_distance_q: quantization not configured, call Register with WithQuantRange")
+			}
+			blobA := args[0].Blob()
+			blobB := args[1].Blob()
+			if !isQuantizedBlob(blobA) {
+				return sqlite.Value{}, fmt.Errorf("vector_distance_q: input a is not quantized (missing magic bytes)")
+			}
+			if !isQuantizedBlob(blobB) {
+				return sqlite.Value{}, fmt.Errorf("vector_distance_q: input b is not quantized (missing magic bytes)")
+			}
+			expected := 2 + cfg.dim
+			if len(blobA) != expected {
+				return sqlite.Value{}, fmt.Errorf("vector_distance_q: expected %d bytes (dim=%d), got %d", expected, cfg.dim, len(blobA))
+			}
+			if len(blobB) != expected {
+				return sqlite.Value{}, fmt.Errorf("vector_distance_q: expected %d bytes (dim=%d), got %d", expected, cfg.dim, len(blobB))
+			}
+			a, _ := dequantize(blobA, cfg.quantMin, cfg.quantMax)
+			b, _ := dequantize(blobB, cfg.quantMin, cfg.quantMax)
+			return sqlite.FloatValue(l2Squared(a, b)), nil
 		},
 	})
 	if err != nil {
