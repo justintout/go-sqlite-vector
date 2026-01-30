@@ -839,3 +839,179 @@ func TestVectorDistanceQ(t *testing.T) {
 		}
 	})
 }
+
+func TestE2EKNNFloat32(t *testing.T) {
+	conn := openTestConn(t)
+	if err := Register(conn, 3); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sqlitex.ExecuteScript(conn, `
+		CREATE TABLE documents (
+			id INTEGER PRIMARY KEY,
+			content TEXT,
+			embedding BLOB
+		);
+		INSERT INTO documents (content, embedding) VALUES ('a', vector_encode('[1.0, 0.0, 0.0]'));
+		INSERT INTO documents (content, embedding) VALUES ('b', vector_encode('[0.0, 1.0, 0.0]'));
+		INSERT INTO documents (content, embedding) VALUES ('c', vector_encode('[0.0, 0.0, 1.0]'));
+		INSERT INTO documents (content, embedding) VALUES ('d', vector_encode('[1.0, 1.0, 0.0]'));
+		INSERT INTO documents (content, embedding) VALUES ('e', vector_encode('[0.5, 0.5, 0.5]'));
+	`, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query: nearest to [1, 0, 0], expect 'a' first (dist=0), then 'd' (dist=1), then 'e' (dist=0.5)
+	var results []string
+	err := sqlitex.Execute(conn,
+		"SELECT content FROM documents ORDER BY vector_distance(embedding, vector_encode('[1.0, 0.0, 0.0]')) LIMIT 3",
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				results = append(results, stmt.ColumnText(0))
+				return nil
+			},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(results) != 3 {
+		t.Fatalf("got %d results, want 3", len(results))
+	}
+	if results[0] != "a" {
+		t.Errorf("nearest[0] = %q, want 'a'", results[0])
+	}
+	// 'e' has dist = (1-0.5)^2 + (0-0.5)^2 + (0-0.5)^2 = 0.75
+	// 'd' has dist = (1-1)^2 + (0-1)^2 + (0-0)^2 = 1.0
+	if results[1] != "e" {
+		t.Errorf("nearest[1] = %q, want 'e'", results[1])
+	}
+	if results[2] != "d" {
+		t.Errorf("nearest[2] = %q, want 'd'", results[2])
+	}
+}
+
+func TestE2EKNNQuantized(t *testing.T) {
+	conn := openTestConn(t)
+	if err := Register(conn, 3, WithQuantRange(-1, 1)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sqlitex.ExecuteScript(conn, `
+		CREATE TABLE docs_q (
+			id INTEGER PRIMARY KEY,
+			content TEXT,
+			embedding_q BLOB
+		);
+		INSERT INTO docs_q (content, embedding_q) VALUES ('a', vector_quantize(vector_encode('[0.9, 0.0, 0.0]')));
+		INSERT INTO docs_q (content, embedding_q) VALUES ('b', vector_quantize(vector_encode('[0.0, 0.9, 0.0]')));
+		INSERT INTO docs_q (content, embedding_q) VALUES ('c', vector_quantize(vector_encode('[0.0, 0.0, 0.9]')));
+	`, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Also get float32 ordering for comparison
+	if err := sqlitex.ExecuteScript(conn, `
+		CREATE TABLE docs_f (
+			id INTEGER PRIMARY KEY,
+			content TEXT,
+			embedding BLOB
+		);
+		INSERT INTO docs_f (content, embedding) VALUES ('a', vector_encode('[0.9, 0.0, 0.0]'));
+		INSERT INTO docs_f (content, embedding) VALUES ('b', vector_encode('[0.0, 0.9, 0.0]'));
+		INSERT INTO docs_f (content, embedding) VALUES ('c', vector_encode('[0.0, 0.0, 0.9]'));
+	`, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var floatOrder, quantOrder []string
+	err := sqlitex.Execute(conn,
+		"SELECT content FROM docs_f ORDER BY vector_distance(embedding, vector_encode('[0.8, 0.1, 0.0]'))",
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				floatOrder = append(floatOrder, stmt.ColumnText(0))
+				return nil
+			},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = sqlitex.Execute(conn,
+		"SELECT content FROM docs_q ORDER BY vector_distance_q(embedding_q, vector_quantize(vector_encode('[0.8, 0.1, 0.0]')))",
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				quantOrder = append(quantOrder, stmt.ColumnText(0))
+				return nil
+			},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(floatOrder) != len(quantOrder) {
+		t.Fatalf("float order has %d items, quant has %d", len(floatOrder), len(quantOrder))
+	}
+	for i := range floatOrder {
+		if floatOrder[i] != quantOrder[i] {
+			t.Errorf("ordering mismatch at %d: float=%q, quant=%q", i, floatOrder[i], quantOrder[i])
+		}
+	}
+}
+
+func TestE2ERegisterOverwrite(t *testing.T) {
+	conn := openTestConn(t)
+	if err := Register(conn, 3); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-register with dim=4
+	if err := Register(conn, 4); err != nil {
+		t.Fatal(err)
+	}
+
+	// vector_encode should now expect 4 dimensions
+	var blobLen int
+	err := sqlitex.ExecuteTransient(conn,
+		"SELECT vector_encode('[1,2,3,4]')",
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				blobLen = stmt.ColumnLen(0)
+				return nil
+			},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blobLen != 16 { // 4 * 4 bytes
+		t.Errorf("blob length = %d, want 16 (4 dims * 4 bytes)", blobLen)
+	}
+}
+
+func TestE2EFloat32ToBlobWithBinding(t *testing.T) {
+	conn := openTestConn(t)
+	if err := Register(conn, 3); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use Float32ToBlob to create a blob and bind it as a parameter
+	query := Float32ToBlob([]float32{1.0, 0.0, 0.0})
+	target := Float32ToBlob([]float32{0.0, 1.0, 0.0})
+
+	var dist float64
+	err := sqlitex.ExecuteTransient(conn,
+		"SELECT vector_distance(?1, ?2)",
+		&sqlitex.ExecOptions{
+			Args: []any{query, target},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				dist = stmt.ColumnFloat(0)
+				return nil
+			},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dist != 2.0 {
+		t.Errorf("distance = %v, want 2.0", dist)
+	}
+}

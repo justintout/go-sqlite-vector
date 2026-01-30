@@ -280,25 +280,25 @@ _(no failures)_
 ## Part 10: End-to-End Integration Tests
 
 ### Work
-- [ ] Write full pipeline integration tests that mirror real usage:
+- [x] Write full pipeline integration tests that mirror real usage:
   - Create table, insert rows with `vector_encode`, query with `vector_distance` + `ORDER BY` + `LIMIT`
   - Verify k-NN ordering is correct for a known dataset
   - Create table with quantized embeddings, insert with `vector_quantize(vector_encode(...))`, query with `vector_distance_q`
   - Verify quantized k-NN ordering matches float32 k-NN ordering
   - Test `Register` overwrite: register dim=3, then re-register dim=4, verify dim=4 functions work
-- [ ] Write test for Go-level `Float32ToBlob` used with SQL parameter binding (bind blob, then compute distance)
+- [x] Write test for Go-level `Float32ToBlob` used with SQL parameter binding (bind blob, then compute distance)
 
 ### Validation
-- [ ] `go test ./...` passes (all tests including new e2e tests)
-- [ ] `go vet ./...` passes
-- [ ] `go test -count=1 ./...` passes (no caching)
-- [ ] `go test -race ./...` passes
+- [x] `go test ./...` passes (all tests including new e2e tests)
+- [x] `go vet ./...` passes
+- [x] `go test -count=1 ./...` passes (no caching)
+- [x] `go test -race ./...` passes
 
 ### Failure Log
-_(record any validation failures here before fixing)_
+_(no failures)_
 
 ### Commit
-- [ ] Commit: "add end-to-end integration tests"
+- [x] Commit: "add end-to-end integration tests"
 
 ---
 
