@@ -20,6 +20,15 @@ func (m *mockEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
 	return m.vec, m.err
 }
 
+type mockChunker struct {
+	chunks []string
+	err    error
+}
+
+func (m *mockChunker) Chunk(_ string) ([]string, error) {
+	return m.chunks, m.err
+}
+
 func openTestConn(t *testing.T) *sqlite.Conn {
 	t.Helper()
 	conn, err := sqlite.OpenConn(":memory:")
@@ -1161,5 +1170,194 @@ func TestE2EVectorEmbedWithDistance(t *testing.T) {
 	}
 	if nearest != "a" {
 		t.Errorf("nearest = %q, want 'a'", nearest)
+	}
+}
+
+func TestVectorChunk(t *testing.T) {
+	t.Run("multiple chunks", func(t *testing.T) {
+		conn := openTestConn(t)
+		ch := &mockChunker{chunks: []string{"chunk one", "chunk two", "chunk three"}}
+		if err := Register(conn, 3, WithChunker(ch)); err != nil {
+			t.Fatal(err)
+		}
+		var values []string
+		var indices []int
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT value, chunk_index FROM vector_chunk('some text')",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					values = append(values, stmt.ColumnText(0))
+					indices = append(indices, stmt.ColumnInt(1))
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(values) != 3 {
+			t.Fatalf("got %d rows, want 3", len(values))
+		}
+		wantValues := []string{"chunk one", "chunk two", "chunk three"}
+		for i := range values {
+			if values[i] != wantValues[i] {
+				t.Errorf("value[%d] = %q, want %q", i, values[i], wantValues[i])
+			}
+			if indices[i] != i {
+				t.Errorf("chunk_index[%d] = %d, want %d", i, indices[i], i)
+			}
+		}
+	})
+
+	t.Run("single chunk", func(t *testing.T) {
+		conn := openTestConn(t)
+		ch := &mockChunker{chunks: []string{"only chunk"}}
+		if err := Register(conn, 3, WithChunker(ch)); err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT value FROM vector_chunk('text')",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					count++
+					if stmt.ColumnText(0) != "only chunk" {
+						t.Errorf("value = %q, want 'only chunk'", stmt.ColumnText(0))
+					}
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Errorf("got %d rows, want 1", count)
+		}
+	})
+
+	t.Run("NULL input returns zero rows", func(t *testing.T) {
+		conn := openTestConn(t)
+		ch := &mockChunker{chunks: []string{"should not appear"}}
+		if err := Register(conn, 3, WithChunker(ch)); err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT value FROM vector_chunk(NULL)",
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					count++
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Errorf("got %d rows for NULL input, want 0", count)
+		}
+	})
+
+	t.Run("without WithChunker returns error", func(t *testing.T) {
+		conn := openTestConn(t)
+		if err := Register(conn, 3); err != nil {
+			t.Fatal(err)
+		}
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT value FROM vector_chunk('text')", nil)
+		if err == nil {
+			t.Fatal("expected error when chunker not configured")
+		}
+	})
+
+	t.Run("chunker error propagates", func(t *testing.T) {
+		conn := openTestConn(t)
+		ch := &mockChunker{err: errors.New("chunker failed")}
+		if err := Register(conn, 3, WithChunker(ch)); err != nil {
+			t.Fatal(err)
+		}
+		err := sqlitex.ExecuteTransient(conn,
+			"SELECT value FROM vector_chunk('text')", nil)
+		if err == nil {
+			t.Fatal("expected error from chunker")
+		}
+	})
+}
+
+func TestE2EVectorChunkWithEmbed(t *testing.T) {
+	conn := openTestConn(t)
+	ch := &mockChunker{chunks: []string{"part one", "part two"}}
+	emb := &mockEmbedder{vec: []float32{0.5, 0.5, 0.5}}
+	if err := Register(conn, 3, WithChunker(ch), WithEmbedder(emb)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sqlitex.ExecuteScript(conn, `
+		CREATE TABLE doc_chunks (
+			id INTEGER PRIMARY KEY,
+			chunk_idx INTEGER,
+			chunk_text TEXT,
+			embedding BLOB
+		);
+	`, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert chunks with embeddings using vector_chunk + vector_embed composition
+	err := sqlitex.ExecuteTransient(conn,
+		"INSERT INTO doc_chunks (chunk_idx, chunk_text, embedding) SELECT chunk_index, value, vector_embed(value) FROM vector_chunk('full document text')",
+		nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify rows were inserted
+	var count int
+	err = sqlitex.ExecuteTransient(conn,
+		"SELECT COUNT(*) FROM doc_chunks",
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				count = stmt.ColumnInt(0)
+				return nil
+			},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("got %d rows, want 2", count)
+	}
+
+	// Verify embeddings are valid blobs
+	var blobLen int
+	err = sqlitex.ExecuteTransient(conn,
+		"SELECT LENGTH(embedding) FROM doc_chunks LIMIT 1",
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				blobLen = stmt.ColumnInt(0)
+				return nil
+			},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blobLen != 12 { // 3 dims * 4 bytes
+		t.Errorf("embedding blob length = %d, want 12", blobLen)
+	}
+
+	// Verify distance search works on chunked embeddings
+	var nearest string
+	err = sqlitex.ExecuteTransient(conn,
+		"SELECT chunk_text FROM doc_chunks ORDER BY vector_distance(embedding, vector_encode('[0.5, 0.5, 0.5]')) LIMIT 1",
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				nearest = stmt.ColumnText(0)
+				return nil
+			},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nearest != "part one" && nearest != "part two" {
+		t.Errorf("nearest = %q, want 'part one' or 'part two'", nearest)
 	}
 }

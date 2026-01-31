@@ -47,6 +47,7 @@ All functions are registered by calling `vector.Register`. NULL inputs produce N
 | `vector_quantize` | `(vec BLOB) -> BLOB` | Float32 blob to scalar int8 quantized blob |
 | `vector_distance_q` | `(a BLOB, b BLOB) -> REAL` | Squared L2 distance between two quantized blobs |
 | `vector_embed` | `(text TEXT) -> BLOB` | Embed text into a float32 blob using a configured `Embedder` |
+| `vector_chunk` | `(text TEXT) -> (value TEXT, chunk_index INTEGER)` | Table-valued: split text into chunk rows using a configured `Chunker` |
 
 Squared L2 is used instead of Euclidean distance because it preserves nearest-neighbor ordering and avoids the square root.
 
@@ -65,6 +66,14 @@ func WithEmbedder(e Embedder) Option
 // Embedder produces vector embeddings from text.
 type Embedder interface {
     Embed(ctx context.Context, text string) ([]float32, error)
+}
+
+// Enable the vector_chunk table-valued function with a custom chunker.
+func WithChunker(c Chunker) Option
+
+// Chunker splits text into chunks for embedding.
+type Chunker interface {
+    Chunk(text string) ([]string, error)
 }
 
 // Convert between []float32 and little-endian blobs for parameter binding.
@@ -126,6 +135,33 @@ LIMIT 5;
 ```
 
 Calling `vector_embed` without configuring an embedder returns a SQL error.
+
+## Chunking
+
+Optional `vector_chunk` table-valued function splits text into rows for per-chunk embedding. Provide a `Chunker` implementation via `WithChunker`:
+
+```go
+type myChunker struct{}
+
+func (m *myChunker) Chunk(text string) ([]string, error) {
+    // Split text by paragraph, token count, etc.
+    return splitByTokens(text, 512), nil
+}
+
+vector.Register(conn, 768,
+    vector.WithEmbedder(&myEmbedder{}),
+    vector.WithChunker(&myChunker{}),
+)
+```
+
+```sql
+-- Chunk a document and embed each chunk in one query
+INSERT INTO doc_chunks (doc_id, chunk_idx, chunk_text, embedding)
+SELECT :doc_id, chunk_index, value, vector_embed(value)
+FROM vector_chunk(:text);
+```
+
+Each row returned by `vector_chunk` has a `value` (the chunk text) and a `chunk_index` (0-based position). Calling `vector_chunk` without configuring a chunker returns a SQL error.
 
 ## Design
 

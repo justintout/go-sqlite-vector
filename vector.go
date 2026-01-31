@@ -18,16 +18,29 @@ type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 }
 
+// Chunker splits text into chunks for embedding.
+type Chunker interface {
+	Chunk(text string) ([]string, error)
+}
+
 type config struct {
 	dim          int
 	quantMin     float32
 	quantMax     float32
 	quantEnabled bool
 	embedder     Embedder
+	chunker      Chunker
 }
 
 // Option configures vector function registration.
 type Option func(*config)
+
+// WithChunker enables the vector_chunk table-valued function using the given Chunker.
+func WithChunker(c Chunker) Option {
+	return func(cfg *config) {
+		cfg.chunker = c
+	}
+}
 
 // WithEmbedder enables the vector_embed SQL function using the given Embedder.
 func WithEmbedder(e Embedder) Option {
@@ -193,6 +206,17 @@ func Register(conn *sqlite.Conn, dim int, opts ...Option) error {
 		return err
 	}
 
+	err = conn.SetModule("vector_chunk", &sqlite.Module{
+		Connect: func(c *sqlite.Conn, opts *sqlite.VTableConnectOptions) (sqlite.VTable, *sqlite.VTableConfig, error) {
+			return &chunkVTable{chunker: cfg.chunker}, &sqlite.VTableConfig{
+				Declaration: "CREATE TABLE x(value TEXT, chunk_index INTEGER, text TEXT HIDDEN)",
+			}, nil
+		},
+	})
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -262,4 +286,93 @@ func dequantize(b []byte, min, max float32) ([]float32, error) {
 		v[i] = float32((float64(q)+128)/255*r + float64(min))
 	}
 	return v, nil
+}
+
+const chunkColValue = 0
+const chunkColIndex = 1
+const chunkColText = 2
+
+type chunkVTable struct {
+	chunker Chunker
+}
+
+func (vt *chunkVTable) BestIndex(inputs *sqlite.IndexInputs) (*sqlite.IndexOutputs, error) {
+	outputs := &sqlite.IndexOutputs{
+		EstimatedCost: 1e12,
+		EstimatedRows: 1e6,
+	}
+	for i, c := range inputs.Constraints {
+		if c.Column == chunkColText && c.Op == sqlite.IndexConstraintEq && c.Usable {
+			usage := make([]sqlite.IndexConstraintUsage, len(inputs.Constraints))
+			usage[i] = sqlite.IndexConstraintUsage{
+				ArgvIndex: 1,
+				Omit:      true,
+			}
+			outputs.ConstraintUsage = usage
+			outputs.EstimatedCost = 1
+			outputs.EstimatedRows = 10
+			outputs.ID = sqlite.IndexID{Num: 1}
+			break
+		}
+	}
+	return outputs, nil
+}
+
+func (vt *chunkVTable) Open() (sqlite.VTableCursor, error) {
+	return &chunkCursor{vtab: vt}, nil
+}
+
+func (vt *chunkVTable) Disconnect() error { return nil }
+func (vt *chunkVTable) Destroy() error    { return nil }
+
+type chunkCursor struct {
+	vtab   *chunkVTable
+	chunks []string
+	pos    int
+}
+
+func (cur *chunkCursor) Filter(id sqlite.IndexID, argv []sqlite.Value) error {
+	if cur.vtab.chunker == nil {
+		return fmt.Errorf("vector_chunk: no chunker configured, call Register with WithChunker")
+	}
+	cur.chunks = nil
+	cur.pos = 0
+	if len(argv) == 0 || argv[0].Type() == sqlite.TypeNull {
+		return nil
+	}
+	text := argv[0].Text()
+	chunks, err := cur.vtab.chunker.Chunk(text)
+	if err != nil {
+		return fmt.Errorf("vector_chunk: %w", err)
+	}
+	cur.chunks = chunks
+	return nil
+}
+
+func (cur *chunkCursor) Next() error {
+	cur.pos++
+	return nil
+}
+
+func (cur *chunkCursor) Column(i int, noChange bool) (sqlite.Value, error) {
+	switch i {
+	case chunkColValue:
+		return sqlite.TextValue(cur.chunks[cur.pos]), nil
+	case chunkColIndex:
+		return sqlite.IntegerValue(int64(cur.pos)), nil
+	default:
+		return sqlite.Value{}, nil
+	}
+}
+
+func (cur *chunkCursor) RowID() (int64, error) {
+	return int64(cur.pos), nil
+}
+
+func (cur *chunkCursor) EOF() bool {
+	return cur.pos >= len(cur.chunks)
+}
+
+func (cur *chunkCursor) Close() error {
+	return nil
 }
