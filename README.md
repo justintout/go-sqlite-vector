@@ -46,6 +46,7 @@ All functions are registered by calling `vector.Register`. NULL inputs produce N
 | `vector_distance` | `(a BLOB, b BLOB) -> REAL` | Squared L2 distance between two float32 blobs |
 | `vector_quantize` | `(vec BLOB) -> BLOB` | Float32 blob to scalar int8 quantized blob |
 | `vector_distance_q` | `(a BLOB, b BLOB) -> REAL` | Squared L2 distance between two quantized blobs |
+| `vector_embed` | `(text TEXT) -> BLOB` | Embed text into a float32 blob using a configured `Embedder` |
 
 Squared L2 is used instead of Euclidean distance because it preserves nearest-neighbor ordering and avoids the square root.
 
@@ -57,6 +58,14 @@ func Register(conn *sqlite.Conn, dim int, opts ...Option) error
 
 // Enable int8 quantization with a global min/max range.
 func WithQuantRange(min, max float32) Option
+
+// Enable the vector_embed SQL function with a custom embedder.
+func WithEmbedder(e Embedder) Option
+
+// Embedder produces vector embeddings from text.
+type Embedder interface {
+    Embed(ctx context.Context, text string) ([]float32, error)
+}
 
 // Convert between []float32 and little-endian blobs for parameter binding.
 func Float32ToBlob(v []float32) []byte
@@ -93,6 +102,30 @@ LIMIT 10;
 ```
 
 Values outside the configured range are clamped silently. Calling `vector_quantize` or `vector_distance_q` without configuring a range returns a SQL error.
+
+## Embedding
+
+Optional `vector_embed` function converts text to embeddings inside SQL. Provide an `Embedder` implementation via `WithEmbedder`:
+
+```go
+type myEmbedder struct{}
+
+func (m *myEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+    // Call your embedding API (OpenAI, Ollama, etc.)
+    return callEmbeddingAPI(ctx, text)
+}
+
+vector.Register(conn, 768, vector.WithEmbedder(&myEmbedder{}))
+```
+
+```sql
+SELECT id, content
+FROM documents
+ORDER BY vector_distance(embedding, vector_embed('search query'))
+LIMIT 5;
+```
+
+Calling `vector_embed` without configuring an embedder returns a SQL error.
 
 ## Design
 

@@ -4,6 +4,7 @@
 package vector
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -12,15 +13,28 @@ import (
 	"zombiezen.com/go/sqlite"
 )
 
+// Embedder produces vector embeddings from text.
+type Embedder interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+}
+
 type config struct {
 	dim          int
 	quantMin     float32
 	quantMax     float32
 	quantEnabled bool
+	embedder     Embedder
 }
 
 // Option configures vector function registration.
 type Option func(*config)
+
+// WithEmbedder enables the vector_embed SQL function using the given Embedder.
+func WithEmbedder(e Embedder) Option {
+	return func(c *config) {
+		c.embedder = e
+	}
+}
 
 // WithQuantRange enables quantization and sets the global min/max range
 // for scalar int8 mapping.
@@ -148,6 +162,31 @@ func Register(conn *sqlite.Conn, dim int, opts ...Option) error {
 			a, _ := dequantize(blobA, cfg.quantMin, cfg.quantMax)
 			b, _ := dequantize(blobB, cfg.quantMin, cfg.quantMax)
 			return sqlite.FloatValue(l2Squared(a, b)), nil
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	err = conn.CreateFunction("vector_embed", &sqlite.FunctionImpl{
+		NArgs:         1,
+		Deterministic: false,
+		Scalar: func(ctx sqlite.Context, args []sqlite.Value) (sqlite.Value, error) {
+			if args[0].Type() == sqlite.TypeNull {
+				return sqlite.Value{}, nil
+			}
+			if cfg.embedder == nil {
+				return sqlite.Value{}, fmt.Errorf("vector_embed: no embedder configured, call Register with WithEmbedder")
+			}
+			text := args[0].Text()
+			floats, err := cfg.embedder.Embed(context.Background(), text)
+			if err != nil {
+				return sqlite.Value{}, fmt.Errorf("vector_embed: %w", err)
+			}
+			if len(floats) != cfg.dim {
+				return sqlite.Value{}, fmt.Errorf("vector_embed: embedder returned dimension %d, expected %d", len(floats), cfg.dim)
+			}
+			return sqlite.BlobValue(Float32ToBlob(floats)), nil
 		},
 	})
 	if err != nil {

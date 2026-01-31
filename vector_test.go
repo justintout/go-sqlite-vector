@@ -2,12 +2,23 @@ package vector
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"testing"
 
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 )
+
+type mockEmbedder struct {
+	vec []float32
+	err error
+}
+
+func (m *mockEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	return m.vec, m.err
+}
 
 func openTestConn(t *testing.T) *sqlite.Conn {
 	t.Helper()
@@ -1013,5 +1024,142 @@ func TestE2EFloat32ToBlobWithBinding(t *testing.T) {
 	}
 	if dist != 2.0 {
 		t.Errorf("distance = %v, want 2.0", dist)
+	}
+}
+
+func TestVectorEmbed(t *testing.T) {
+	t.Run("valid text returns correct blob", func(t *testing.T) {
+		conn := openTestConn(t)
+		emb := &mockEmbedder{vec: []float32{0.1, 0.2, 0.3}}
+		if err := Register(conn, 3, WithEmbedder(emb)); err != nil {
+			t.Fatal(err)
+		}
+		var blob []byte
+		err := sqlitex.ExecuteTransient(conn, "SELECT vector_embed('hello world')", &sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				r := stmt.ColumnReader(0)
+				b, err := io.ReadAll(r)
+				if err != nil {
+					return err
+				}
+				blob = b
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(blob) != 12 {
+			t.Fatalf("blob length = %d, want 12", len(blob))
+		}
+		floats, err := BlobToFloat32(blob)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []float32{0.1, 0.2, 0.3}
+		for i := range floats {
+			if floats[i] != want[i] {
+				t.Errorf("floats[%d] = %v, want %v", i, floats[i], want[i])
+			}
+		}
+	})
+
+	t.Run("NULL input returns NULL", func(t *testing.T) {
+		conn := openTestConn(t)
+		emb := &mockEmbedder{vec: []float32{0.1, 0.2, 0.3}}
+		if err := Register(conn, 3, WithEmbedder(emb)); err != nil {
+			t.Fatal(err)
+		}
+		var isNull bool
+		err := sqlitex.ExecuteTransient(conn, "SELECT vector_embed(NULL)", &sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				isNull = stmt.ColumnType(0) == sqlite.TypeNull
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isNull {
+			t.Fatal("expected NULL result for NULL input")
+		}
+	})
+
+	t.Run("without WithEmbedder returns error", func(t *testing.T) {
+		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
+		conn := openTestConn(t)
+		if err := Register(conn, 3); err != nil {
+			t.Fatal(err)
+		}
+		err := sqlitex.ExecuteTransient(conn, "SELECT vector_embed('hello')", nil)
+		if err == nil {
+			t.Fatal("expected error when embedder not configured")
+		}
+	})
+
+	t.Run("embedder returns wrong dimension", func(t *testing.T) {
+		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
+		conn := openTestConn(t)
+		emb := &mockEmbedder{vec: []float32{0.1, 0.2}} // dim=2, registered dim=3
+		if err := Register(conn, 3, WithEmbedder(emb)); err != nil {
+			t.Fatal(err)
+		}
+		err := sqlitex.ExecuteTransient(conn, "SELECT vector_embed('hello')", nil)
+		if err == nil {
+			t.Fatal("expected error for dimension mismatch from embedder")
+		}
+	})
+
+	t.Run("embedder returns error", func(t *testing.T) {
+		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
+		conn := openTestConn(t)
+		emb := &mockEmbedder{err: errors.New("embedding service unavailable")}
+		if err := Register(conn, 3, WithEmbedder(emb)); err != nil {
+			t.Fatal(err)
+		}
+		err := sqlitex.ExecuteTransient(conn, "SELECT vector_embed('hello')", nil)
+		if err == nil {
+			t.Fatal("expected error from embedder")
+		}
+	})
+}
+
+func TestE2EVectorEmbedWithDistance(t *testing.T) {
+	conn := openTestConn(t)
+	// Mock embedder that returns different vectors based on input
+	// For testing, we use a fixed embedder and insert rows manually
+	emb := &mockEmbedder{vec: []float32{0.9, 0.1, 0.0}}
+	if err := Register(conn, 3, WithEmbedder(emb)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sqlitex.ExecuteScript(conn, `
+		CREATE TABLE docs (
+			id INTEGER PRIMARY KEY,
+			content TEXT,
+			embedding BLOB
+		);
+		INSERT INTO docs (content, embedding) VALUES ('a', vector_encode('[1.0, 0.0, 0.0]'));
+		INSERT INTO docs (content, embedding) VALUES ('b', vector_encode('[0.0, 1.0, 0.0]'));
+		INSERT INTO docs (content, embedding) VALUES ('c', vector_encode('[0.0, 0.0, 1.0]'));
+	`, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query using vector_embed — mock returns [0.9, 0.1, 0.0], nearest should be 'a'
+	var nearest string
+	err := sqlitex.ExecuteTransient(conn,
+		"SELECT content FROM docs ORDER BY vector_distance(embedding, vector_embed('query text')) LIMIT 1",
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				nearest = stmt.ColumnText(0)
+				return nil
+			},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nearest != "a" {
+		t.Errorf("nearest = %q, want 'a'", nearest)
 	}
 }
