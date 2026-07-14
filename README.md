@@ -1,5 +1,7 @@
 # go-sqlite-vector
 
+[![test](https://github.com/justintout/go-sqlite-vector/actions/workflows/test.yml/badge.svg)](https://github.com/justintout/go-sqlite-vector/actions/workflows/test.yml)
+
 Pure Go vector search for SQLite. No CGo required.
 
 Register scalar SQL functions on a [zombiezen.com/go/sqlite](https://pkg.go.dev/zombiezen.com/go/sqlite) connection to store embeddings as blobs and run k-nearest neighbor queries with `ORDER BY vector_distance(...) LIMIT k`.
