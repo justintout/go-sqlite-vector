@@ -4,7 +4,7 @@ go 1.23.0
 
 toolchain go1.24.12
 
-require zombiezen.com/go/sqlite v1.4.2
+require zombiezen.com/go/sqlite v1.4.3-0.20260620165750-ca2041ed3dd2
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

@@ -72,6 +72,16 @@ func TestSIFT1M(t *testing.T) {
 	exec(t, conn, "UPDATE sift SET embedding_q = vector_quantize(embedding)")
 	quantizeTime := time.Since(start)
 
+	exec(t, conn, "CREATE VIRTUAL TABLE sift_index USING vector_index(float32)")
+	start = time.Now()
+	exec(t, conn, "INSERT INTO sift_index (rowid, embedding) SELECT id, embedding FROM sift")
+	indexTime := time.Since(start)
+
+	exec(t, conn, "CREATE VIRTUAL TABLE sift_index_q USING vector_index(int8)")
+	start = time.Now()
+	exec(t, conn, "INSERT INTO sift_index_q (rowid, embedding) SELECT id, embedding FROM sift")
+	indexQTime := time.Since(start)
+
 	fi, err := os.Stat(dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -80,8 +90,10 @@ func TestSIFT1M(t *testing.T) {
 	t.Logf("SIFT1M: %d base vectors, %d queries, dim=%d, quant range [%g, %g]", len(base), nq, dim, lo, hi)
 	t.Logf("insert float32:       %v", insertTime.Round(time.Millisecond))
 	t.Logf("quantize column:      %v", quantizeTime.Round(time.Millisecond))
-	t.Logf("database size:        %.1f MiB (both columns)", float64(fi.Size())/(1<<20))
-	t.Logf("%-10s %10s %10s %10s %8s %8s %8s", "method", "p50", "p99", "QPS", "R@1", "R@10", "R@100")
+	t.Logf("insert index float32: %v", indexTime.Round(time.Millisecond))
+	t.Logf("insert index int8:    %v", indexQTime.Round(time.Millisecond))
+	t.Logf("database size:        %.1f MiB (all tables)", float64(fi.Size())/(1<<20))
+	t.Logf("%-14s %10s %10s %10s %8s %8s %8s", "method", "p50", "p99", "QPS", "R@1", "R@10", "R@100")
 
 	for _, m := range []struct {
 		name  string
@@ -90,6 +102,8 @@ func TestSIFT1M(t *testing.T) {
 	}{
 		{"float32", "SELECT id FROM sift ORDER BY vector_distance(embedding, ?1) LIMIT 100", Float32ToBlob},
 		{"int8", "SELECT id FROM sift ORDER BY vector_distance_q(embedding_q, ?1) LIMIT 100", func(v []float32) []byte { return quantize(v, lo, hi) }},
+		{"index float32", "SELECT rowid FROM sift_index WHERE embedding MATCH ?1 AND k = 100", Float32ToBlob},
+		{"index int8", "SELECT rowid FROM sift_index_q WHERE embedding MATCH ?1 AND k = 100", Float32ToBlob},
 	} {
 		lat := make([]time.Duration, nq)
 		var r1, r10, r100 float64
@@ -120,7 +134,7 @@ func TestSIFT1M(t *testing.T) {
 		}
 		slices.Sort(lat)
 		n := float64(nq)
-		t.Logf("%-10s %10v %10v %10.2f %8.4f %8.4f %8.4f", m.name,
+		t.Logf("%-14s %10v %10v %10.2f %8.4f %8.4f %8.4f", m.name,
 			lat[nq/2].Round(time.Millisecond), lat[nq*99/100].Round(time.Millisecond),
 			n/total.Seconds(), r1/n, r10/n, r100/n)
 	}
