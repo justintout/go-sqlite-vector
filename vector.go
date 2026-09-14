@@ -115,9 +115,7 @@ func Register(conn *sqlite.Conn, dim int, opts ...Option) error {
 			if len(blobB) != expected {
 				return sqlite.Value{}, fmt.Errorf("vector_distance: expected %d bytes (dim=%d), got %d", expected, cfg.dim, len(blobB))
 			}
-			a, _ := BlobToFloat32(blobA)
-			b, _ := BlobToFloat32(blobB)
-			return sqlite.FloatValue(l2Squared(a, b)), nil
+			return sqlite.FloatValue(l2Squared(blobA, blobB)), nil
 		},
 	})
 	if err != nil {
@@ -172,9 +170,7 @@ func Register(conn *sqlite.Conn, dim int, opts ...Option) error {
 			if len(blobB) != expected {
 				return sqlite.Value{}, fmt.Errorf("vector_distance_q: expected %d bytes (dim=%d), got %d", expected, cfg.dim, len(blobB))
 			}
-			a, _ := dequantize(blobA, cfg.quantMin, cfg.quantMax)
-			b, _ := dequantize(blobB, cfg.quantMin, cfg.quantMax)
-			return sqlite.FloatValue(l2Squared(a, b)), nil
+			return sqlite.FloatValue(l2SquaredQuantized(blobA, blobB, cfg.quantMin, cfg.quantMax)), nil
 		},
 	})
 	if err != nil {
@@ -243,13 +239,44 @@ func BlobToFloat32(b []byte) ([]float32, error) {
 	return v, nil
 }
 
-func l2Squared(a, b []float32) float64 {
+// l2Squared computes squared L2 distance directly on two float32 blobs of equal
+// length. Decoding in place avoids allocating two []float32 per row scanned,
+// and unrolling the loop reduces bounds checks; both dominate scan time.
+func l2Squared(a, b []byte) float64 {
+	b = b[:len(a)]
 	var sum float64
-	for i := range a {
-		d := float64(a[i]) - float64(b[i])
+	i := 0
+	for ; i+16 <= len(a); i += 16 {
+		d0 := f32At(a, i) - f32At(b, i)
+		d1 := f32At(a, i+4) - f32At(b, i+4)
+		d2 := f32At(a, i+8) - f32At(b, i+8)
+		d3 := f32At(a, i+12) - f32At(b, i+12)
+		sum += d0*d0 + d1*d1 + d2*d2 + d3*d3
+	}
+	for ; i+4 <= len(a); i += 4 {
+		d := f32At(a, i) - f32At(b, i)
 		sum += d * d
 	}
 	return sum
+}
+
+func f32At(b []byte, i int) float64 {
+	return float64(math.Float32frombits(binary.LittleEndian.Uint32(b[i:])))
+}
+
+// l2SquaredQuantized computes the squared L2 distance between the dequantized
+// forms of two quantized blobs of equal length without dequantizing.
+// Dequantization is affine, so each component difference is
+// (qa - qb) * (max - min) / 255.
+func l2SquaredQuantized(a, b []byte, min, max float32) float64 {
+	a, b = a[2:], b[2:len(a)]
+	var sum int64
+	for i := range a {
+		d := int64(int8(a[i])) - int64(int8(b[i]))
+		sum += d * d
+	}
+	scale := float64(max-min) / 255
+	return float64(sum) * scale * scale
 }
 
 func isQuantizedBlob(b []byte) bool {
@@ -272,20 +299,6 @@ func quantize(v []float32, min, max float32) []byte {
 		b[2+i] = byte(int8(q))
 	}
 	return b
-}
-
-func dequantize(b []byte, min, max float32) ([]float32, error) {
-	if len(b) < 2 || b[0] != 0x00 || b[1] != 0x01 {
-		return nil, fmt.Errorf("dequantize: missing quantized format magic bytes")
-	}
-	data := b[2:]
-	r := float64(max - min)
-	v := make([]float32, len(data))
-	for i, raw := range data {
-		q := int8(raw)
-		v[i] = float32((float64(q)+128)/255*r + float64(min))
-	}
-	return v, nil
 }
 
 const chunkColValue = 0

@@ -16,8 +16,8 @@ func randomFloat32s(n int) []float32 {
 
 func BenchmarkL2Distance(b *testing.B) {
 	for _, dim := range []int{384, 768, 1536} {
-		a := randomFloat32s(dim)
-		c := randomFloat32s(dim)
+		a := Float32ToBlob(randomFloat32s(dim))
+		c := Float32ToBlob(randomFloat32s(dim))
 		b.Run("dim="+itoa(dim), func(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -41,15 +41,15 @@ func BenchmarkQuantize(b *testing.B) {
 	}
 }
 
-func BenchmarkDequantize(b *testing.B) {
+func BenchmarkL2DistanceQuantized(b *testing.B) {
 	for _, dim := range []int{384, 768, 1536} {
-		v := randomFloat32s(dim)
-		qblob := quantize(v, -1.0, 1.0)
+		qa := quantize(randomFloat32s(dim), -1.0, 1.0)
+		qc := quantize(randomFloat32s(dim), -1.0, 1.0)
 		b.Run("dim="+itoa(dim), func(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				dequantize(qblob, -1.0, 1.0)
+				l2SquaredQuantized(qa, qc, -1.0, 1.0)
 			}
 		})
 	}

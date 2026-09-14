@@ -177,18 +177,18 @@ Each row returned by `vector_chunk` has a `value` (the chunk text) and a `chunk_
 go test -bench=. -benchmem ./...
 ```
 
-Results on Apple M3 Max:
+Results on Apple M3 Max. Distance benchmarks operate on encoded blobs, as the SQL functions do:
 
 ```
-BenchmarkL2Distance/dim=384     10429109    115.1 ns/op     0 B/op    0 allocs/op
-BenchmarkL2Distance/dim=768      5440725    221.4 ns/op     0 B/op    0 allocs/op
-BenchmarkL2Distance/dim=1536     2768809    434.3 ns/op     0 B/op    0 allocs/op
-BenchmarkQuantize/dim=384        2386230    504.5 ns/op   416 B/op    1 allocs/op
-BenchmarkQuantize/dim=768        1000000   1001   ns/op   896 B/op    1 allocs/op
-BenchmarkQuantize/dim=1536        606144   1974   ns/op  1792 B/op    1 allocs/op
-BenchmarkDequantize/dim=384      2781045    439.3 ns/op  1536 B/op    1 allocs/op
-BenchmarkDequantize/dim=768      1607391    739.0 ns/op  3072 B/op    1 allocs/op
-BenchmarkDequantize/dim=1536      788222   1473   ns/op  6144 B/op    1 allocs/op
+BenchmarkL2Distance/dim=384            4908330     241.5 ns/op     0 B/op    0 allocs/op
+BenchmarkL2Distance/dim=768            2496775     483.3 ns/op     0 B/op    0 allocs/op
+BenchmarkL2Distance/dim=1536           1246688     965.9 ns/op     0 B/op    0 allocs/op
+BenchmarkQuantize/dim=384              2521759     477.5 ns/op   416 B/op    1 allocs/op
+BenchmarkQuantize/dim=768              1269049     944.5 ns/op   896 B/op    1 allocs/op
+BenchmarkQuantize/dim=1536              630952    1889   ns/op  1792 B/op    1 allocs/op
+BenchmarkL2DistanceQuantized/dim=384  11420806     104.5 ns/op     0 B/op    0 allocs/op
+BenchmarkL2DistanceQuantized/dim=768   5961984     201.5 ns/op     0 B/op    0 allocs/op
+BenchmarkL2DistanceQuantized/dim=1536  3041773     398.2 ns/op     0 B/op    0 allocs/op
 ```
 
 ### SIFT1M
@@ -206,8 +206,8 @@ Results on Apple M3 Max, macOS 15.7, Go 1.24.12. Build time is the time to inser
 
 | Implementation | Search | Build | p50 | QPS | Recall@10 | Recall@100 |
 |---|---|---|---|---|---|---|
-| go-sqlite-vector `vector_distance` | exact scan | 2.3s | 733 ms | 1.4 | 0.999 | 1.000 |
-| go-sqlite-vector `vector_distance_q` (int8) | quantized scan | +3.0s | 659 ms | 1.5 | 0.983 | 0.988 |
+| go-sqlite-vector `vector_distance` | exact scan | 2.4s | 362 ms | 2.8 | 0.999 | 1.000 |
+| go-sqlite-vector `vector_distance_q` (int8) | quantized scan | +3.1s | 339 ms | 3.0 | 0.983 | 0.988 |
 | sqlite-vec 0.1.9 `vec_distance_l2` | exact scan | 1.4s | 306 ms | 3.3 | 0.999 | 1.000 |
 | sqlite-vec 0.1.9 `vec0` | exact scan | 4.4s | 143 ms | 6.9 | 0.999 | 1.000 |
 | FAISS 1.15 `IndexFlatL2` | exact, in memory | 0.0s | 7.9 ms | 125 | 0.999 | 1.000 |
@@ -215,6 +215,14 @@ Results on Apple M3 Max, macOS 15.7, Go 1.24.12. Build time is the time to inser
 | hnswlib 0.8 M=16 ef=512 | approximate | 46.8s | 1.22 ms | 852 | 0.999 | 0.998 |
 
 Exact recall@10 is 0.999 rather than 1.000 because the ground truth contains tied distances. The int8 column stores 130 bytes per vector instead of 512.
+
+Scans read the whole table through SQLite's pager. Memory-mapping the database file avoids a `pread` system call per page and speeds up scans of large tables:
+
+```sql
+PRAGMA mmap_size = 1073741824; -- 1 GiB
+```
+
+With this setting, SIFT1M float32 queries take 246 ms (p50) and int8 queries 286 ms. The comparison table above uses default settings for every SQLite implementation.
 
 ## License
 

@@ -100,7 +100,7 @@ Converts a float32 blob to a scalar int8 quantized blob using the globally confi
 vector_distance_q(a BLOB, b BLOB) -> REAL
 ```
 
-Computes squared L2 distance between two quantized int8 blobs. Both blobs are dequantized back to float32 using the configured min/max range before computing the distance.
+Computes squared L2 distance between the dequantized forms of two quantized int8 blobs, using the configured min/max range. Because dequantization is affine, the distance is computed directly from the int8 values as `sum((qa - qb)^2) * ((max - min) / 255)^2` without materializing float32 vectors.
 
 - **Input**: two quantized int8 blobs.
 - **Output**: `REAL` (float64).
@@ -249,7 +249,7 @@ Go benchmarks (`testing.B`) for the core operations at dimensions 384, 768, and 
 
 - `BenchmarkL2Distance_{384,768,1536}`
 - `BenchmarkQuantize_{384,768,1536}`
-- `BenchmarkDequantize_{384,768,1536}`
+- `BenchmarkL2DistanceQuantized_{384,768,1536}`
 - `BenchmarkVectorEncode_{384,768,1536}`
 
 ## Design Notes

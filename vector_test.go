@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"testing"
 
 	"zombiezen.com/go/sqlite"
@@ -348,10 +349,16 @@ func TestL2Squared(t *testing.T) {
 			b:    []float32{7},
 			want: 16.0,
 		},
+		{
+			name: "unrolled block plus remainder",
+			a:    []float32{1, 2, 3, 4, 5},
+			b:    []float32{2, 4, 6, 8, 10},
+			want: 55.0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := l2Squared(tt.a, tt.b)
+			got := l2Squared(Float32ToBlob(tt.a), Float32ToBlob(tt.b))
 			if got != tt.want {
 				t.Errorf("l2Squared(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
 			}
@@ -561,46 +568,45 @@ func TestQuantize(t *testing.T) {
 	})
 }
 
-func TestDequantize(t *testing.T) {
-	t.Run("round-trip approximate equality", func(t *testing.T) {
-		original := []float32{0.5, -0.3, 0.0, 1.0, -1.0}
-		qblob := quantize(original, -1.0, 1.0)
-		got, err := dequantize(qblob, -1.0, 1.0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(got) != len(original) {
-			t.Fatalf("dequantize length = %d, want %d", len(got), len(original))
-		}
-		for i := range got {
-			diff := got[i] - original[i]
-			if diff < 0 {
-				diff = -diff
+func TestL2SquaredQuantized(t *testing.T) {
+	// With range [0, 255] each integer value quantizes to itself minus 128,
+	// so the quantized distance equals the float32 distance exactly.
+	tests := []struct {
+		name     string
+		a, b     []float32
+		min, max float32
+		want     float64
+	}{
+		{
+			name: "identical vectors",
+			a:    []float32{0, 10, 255},
+			b:    []float32{0, 10, 255},
+			min:  0, max: 255,
+			want: 0.0,
+		},
+		{
+			name: "integer values in unit-step range",
+			a:    []float32{0, 10, 255},
+			b:    []float32{3, 14, 255},
+			min:  0, max: 255,
+			want: 25.0,
+		},
+		{
+			name: "scaled by range",
+			a:    []float32{0, 0},
+			b:    []float32{510, 510},
+			min:  0, max: 510,
+			want: 2 * 255 * 255 * 4,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := l2SquaredQuantized(quantize(tt.a, tt.min, tt.max), quantize(tt.b, tt.min, tt.max), tt.min, tt.max)
+			if math.Abs(got-tt.want) > 1e-9*max(1, tt.want) {
+				t.Errorf("l2SquaredQuantized = %v, want %v", got, tt.want)
 			}
-			// int8 precision: max error is (max-min)/255 ≈ 0.0078 for range [-1,1]
-			if diff > 0.01 {
-				t.Errorf("round-trip[%d]: got %v, want ~%v (diff=%v)", i, got[i], original[i], diff)
-			}
-		}
-	})
-
-	t.Run("missing magic bytes error", func(t *testing.T) {
-		_, err := dequantize([]byte{0x01, 0x02, 0x03}, -1.0, 1.0)
-		if err == nil {
-			t.Fatal("expected error for missing magic bytes")
-		}
-	})
-
-	t.Run("correct output length", func(t *testing.T) {
-		qblob := quantize([]float32{0.1, 0.2, 0.3}, -1.0, 1.0)
-		got, err := dequantize(qblob, -1.0, 1.0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(got) != 3 {
-			t.Errorf("output length = %d, want 3", len(got))
-		}
-	})
+		})
+	}
 }
 
 func TestVectorQuantize(t *testing.T) {
