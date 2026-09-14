@@ -171,18 +171,6 @@ func TestRegister(t *testing.T) {
 		}
 	})
 
-	t.Run("stub functions return error", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable, preventing SQL error propagation")
-		conn := openTestConn(t)
-		if err := Register(conn, 3); err != nil {
-			t.Fatal(err)
-		}
-		err := sqlitex.ExecuteTransient(conn, "SELECT vector_encode('[1,2,3]')", nil)
-		if err == nil {
-			t.Fatal("expected stub error from vector_encode, got nil")
-		}
-	})
-
 	t.Run("re-register overwrites without error", func(t *testing.T) {
 		conn := openTestConn(t)
 		if err := Register(conn, 3); err != nil {
@@ -231,7 +219,6 @@ func TestVectorEncode(t *testing.T) {
 	})
 
 	t.Run("dimension mismatch", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		if err := Register(conn, 3); err != nil {
 			t.Fatal(err)
@@ -243,7 +230,6 @@ func TestVectorEncode(t *testing.T) {
 	})
 
 	t.Run("invalid JSON", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		if err := Register(conn, 3); err != nil {
 			t.Fatal(err)
@@ -255,7 +241,6 @@ func TestVectorEncode(t *testing.T) {
 	})
 
 	t.Run("JSON object not array", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		if err := Register(conn, 3); err != nil {
 			t.Fatal(err)
@@ -459,7 +444,6 @@ func TestVectorDistance(t *testing.T) {
 	})
 
 	t.Run("wrong dimension blob error", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		if err := Register(conn, 3); err != nil {
 			t.Fatal(err)
@@ -476,7 +460,6 @@ func TestVectorDistance(t *testing.T) {
 	})
 
 	t.Run("quantized blob input error", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		if err := Register(conn, 3); err != nil {
 			t.Fatal(err)
@@ -641,7 +624,6 @@ func TestVectorQuantize(t *testing.T) {
 	})
 
 	t.Run("without WithQuantRange returns error", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		if err := Register(conn, 3); err != nil {
 			t.Fatal(err)
@@ -654,7 +636,6 @@ func TestVectorQuantize(t *testing.T) {
 	})
 
 	t.Run("wrong dimension input error", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		if err := Register(conn, 3, WithQuantRange(-1, 1)); err != nil {
 			t.Fatal(err)
@@ -812,7 +793,6 @@ func TestVectorDistanceQ(t *testing.T) {
 	})
 
 	t.Run("non-quantized blob input error", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		if err := Register(conn, 3, WithQuantRange(-1, 1)); err != nil {
 			t.Fatal(err)
@@ -825,7 +805,6 @@ func TestVectorDistanceQ(t *testing.T) {
 	})
 
 	t.Run("without WithQuantRange returns error", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		if err := Register(conn, 3); err != nil {
 			t.Fatal(err)
@@ -1101,7 +1080,6 @@ func TestVectorEmbed(t *testing.T) {
 	})
 
 	t.Run("without WithEmbedder returns error", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		if err := Register(conn, 3); err != nil {
 			t.Fatal(err)
@@ -1113,7 +1091,6 @@ func TestVectorEmbed(t *testing.T) {
 	})
 
 	t.Run("embedder returns wrong dimension", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		emb := &mockEmbedder{vec: []float32{0.1, 0.2}} // dim=2, registered dim=3
 		if err := Register(conn, 3, WithEmbedder(emb)); err != nil {
@@ -1126,7 +1103,6 @@ func TestVectorEmbed(t *testing.T) {
 	})
 
 	t.Run("embedder returns error", func(t *testing.T) {
-		t.Skip("blocked on zombiezen/go/sqlite fix: resultError shadows err variable")
 		conn := openTestConn(t)
 		emb := &mockEmbedder{err: errors.New("embedding service unavailable")}
 		if err := Register(conn, 3, WithEmbedder(emb)); err != nil {
