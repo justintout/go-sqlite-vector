@@ -202,6 +202,14 @@ func Register(conn *sqlite.Conn, dim int, opts ...Option) error {
 		return err
 	}
 
+	err = conn.SetModule("vector_index", &sqlite.Module{
+		Create:  indexConnect(cfg, true),
+		Connect: indexConnect(cfg, false),
+	})
+	if err != nil {
+		return err
+	}
+
 	err = conn.SetModule("vector_chunk", &sqlite.Module{
 		Connect: func(c *sqlite.Conn, opts *sqlite.VTableConnectOptions) (sqlite.VTable, *sqlite.VTableConfig, error) {
 			return &chunkVTable{chunker: cfg.chunker}, &sqlite.VTableConfig{
@@ -269,14 +277,19 @@ func f32At(b []byte, i int) float64 {
 // Dequantization is affine, so each component difference is
 // (qa - qb) * (max - min) / 255.
 func l2SquaredQuantized(a, b []byte, min, max float32) float64 {
-	a, b = a[2:], b[2:len(a)]
+	scale := float64(max-min) / 255
+	return float64(l2SquaredInt8(a[2:], b[2:])) * scale * scale
+}
+
+// l2SquaredInt8 sums squared differences of raw int8 values of equal length.
+func l2SquaredInt8(a, b []byte) int64 {
+	b = b[:len(a)]
 	var sum int64
 	for i := range a {
 		d := int64(int8(a[i])) - int64(int8(b[i]))
 		sum += d * d
 	}
-	scale := float64(max-min) / 255
-	return float64(sum) * scale * scale
+	return sum
 }
 
 func isQuantizedBlob(b []byte) bool {
