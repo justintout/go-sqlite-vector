@@ -191,6 +191,31 @@ BenchmarkDequantize/dim=768      1607391    739.0 ns/op  3072 B/op    1 allocs/o
 BenchmarkDequantize/dim=1536      788222   1473   ns/op  6144 B/op    1 allocs/op
 ```
 
+### SIFT1M
+
+[SIFT1M](http://corpus-texmex.irisa.fr/) is a standard nearest-neighbor benchmark: 1,000,000 base vectors and 10,000 query vectors, 128 dimensions, L2 distance, with published ground-truth neighbors. The first 100 queries run single-threaded with k=100 against an on-disk database with default SQLite settings.
+
+```
+curl -O ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz
+mkdir -p .tmp && tar xzf sift.tar.gz -C .tmp
+go test -tags sift -run TestSIFT1M -timeout 0 -v -sift.dir .tmp/sift
+uv run bench/sift_compare.py .tmp/sift 100
+```
+
+Results on Apple M3 Max, macOS 15.7, Go 1.24.12. Build time is the time to insert all vectors (HNSW builds use all cores).
+
+| Implementation | Search | Build | p50 | QPS | Recall@10 | Recall@100 |
+|---|---|---|---|---|---|---|
+| go-sqlite-vector `vector_distance` | exact scan | 2.3s | 733 ms | 1.4 | 0.999 | 1.000 |
+| go-sqlite-vector `vector_distance_q` (int8) | exact scan | +3.0s | 659 ms | 1.5 | 0.983 | 0.988 |
+| sqlite-vec 0.1.9 `vec_distance_l2` | exact scan | 1.4s | 306 ms | 3.3 | 0.999 | 1.000 |
+| sqlite-vec 0.1.9 `vec0` | exact scan | 4.4s | 143 ms | 6.9 | 0.999 | 1.000 |
+| FAISS 1.15 `IndexFlatL2` | exact, in memory | 0.0s | 7.9 ms | 125 | 0.999 | 1.000 |
+| FAISS 1.15 HNSW M=16 ef=512 | approximate | 28.7s | 0.91 ms | 1,121 | 0.999 | 0.999 |
+| hnswlib 0.8 M=16 ef=512 | approximate | 46.8s | 1.22 ms | 852 | 0.999 | 0.998 |
+
+Exact recall@10 is 0.999 rather than 1.000 because the ground truth contains tied distances. The int8 column stores 130 bytes per vector instead of 512.
+
 ## License
 
 BSD-3-Clause

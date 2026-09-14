@@ -363,6 +363,31 @@ _(no failures)_
 
 ---
 
+## Part 13: SIFT1M Benchmark
+
+### Work
+- [x] Add `.gitignore` with `.tmp/` (dataset and results live there)
+- [x] Create `sift_test.go` behind the `sift` build tag:
+  - `TestSIFT1M` loads TEXMEX SIFT1M (`-sift.dir`), inserts 1M float32 blobs into an on-disk database, fills a quantized column
+  - Runs `-sift.queries` single-threaded k=100 queries for `vector_distance` and `vector_distance_q`
+  - Reports insert time, database size, p50/p99 latency, QPS, recall@1/10/100 against the published ground truth
+- [x] Create `bench/sift_compare.py` (uv inline script) running the same queries through FAISS flat, FAISS HNSW, hnswlib, and sqlite-vec
+- [x] Record results in README.md
+
+### Validation
+- [x] `go test -tags sift -run TestSIFT1M -timeout 0 -v -sift.dir .tmp/sift` passes; float32 recall@10 is ~1.0
+- [x] `uv run bench/sift_compare.py .tmp/sift 100` runs every implementation
+- [x] `go vet ./...` and `go vet -tags sift ./...` pass
+- [x] `go test -race ./...` passes (tag excludes the SIFT test by default)
+
+### Failure Log
+- First 100-query Go run overlapped with a Python smoke run; float32 p50 rose from ~760ms to ~1.2s. Root cause: CPU contention (HNSW build uses all cores). Fix: stopped the run and re-ran Go and Python sequentially.
+
+### Commit
+- [x] Commit: "add SIFT1M benchmark and comparison"
+
+---
+
 ## Completion Checklist
 
 - [x] All 12 parts have status `[x]`
