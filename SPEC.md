@@ -100,11 +100,85 @@ Converts a float32 blob to a scalar int8 quantized blob using the globally confi
 vector_distance_q(a BLOB, b BLOB) -> REAL
 ```
 
-Computes squared L2 distance between two quantized int8 blobs. Both blobs are dequantized back to float32 using the configured min/max range before computing the distance.
+Computes squared L2 distance between the dequantized forms of two quantized int8 blobs, using the configured min/max range. Because dequantization is affine, the distance is computed directly from the int8 values as `sum((qa - qb)^2) * ((max - min) / 255)^2` without materializing float32 vectors.
 
 - **Input**: two quantized int8 blobs.
 - **Output**: `REAL` (float64).
 - **Errors**: returns a SQL error if quantization was not configured. Returns a SQL error if either blob does not have the quantized format magic bytes (0x00, 0x01 prefix). Returns a SQL error if either blob's data length does not equal `dim` (total blob length = 2 + dim).
+
+## vector_index Virtual Table
+
+`Register` also registers a virtual table module named `vector_index`. It stores vectors in chunks and answers k-nearest neighbor queries by scanning chunks in Go instead of evaluating a SQL function per row.
+
+```sql
+CREATE VIRTUAL TABLE docs_vec USING vector_index();       -- float32 storage
+CREATE VIRTUAL TABLE docs_vec USING vector_index(float32); -- same
+CREATE VIRTUAL TABLE docs_vec USING vector_index(int8);    -- quantized storage
+CREATE VIRTUAL TABLE docs_vec USING vector_index(int8, chunk_size=4096);
+```
+
+Arguments are comma-separated and may appear in any order:
+
+- `float32` (default) or `int8`: storage type.
+- `chunk_size=N`: vectors per chunk, a positive integer. When omitted, `N = max(1, 1048576 / vectorBytes)`, where `vectorBytes` is `dim * 4` for float32 and `dim` for int8, so each chunk holds about 1 MiB of vector data.
+
+The storage type and chunk size are fixed when the table is created and read from the `name_info` shadow table on later connections.
+
+Columns:
+
+| Column | Type | Description |
+|---|---|---|
+| `rowid` | INTEGER | Row identifier. Assigned automatically when omitted on insert. |
+| `embedding` | BLOB | The vector. Written as a float32 blob of `dim * 4` bytes. Read back as a float32 blob, or a quantized blob for int8 tables. |
+| `distance` | REAL, hidden | Squared L2 distance to the `MATCH` query. NULL outside a search. |
+| `k` | INTEGER, hidden | Number of nearest neighbors to return. |
+
+### Search
+
+A search constrains `embedding MATCH` with a float32 query blob and gives k either as a `k` constraint or as `LIMIT`:
+
+```sql
+SELECT rowid, distance FROM docs_vec WHERE embedding MATCH ?1 AND k = 10;
+
+SELECT rowid, distance FROM docs_vec WHERE embedding MATCH ?1 ORDER BY distance LIMIT 10;
+```
+
+- Results are ordered by ascending distance, then rowid.
+- With `LIMIT n OFFSET m`, the search returns the `n + m` nearest rows and SQLite applies the offset.
+- SQLite passes `LIMIT` to the virtual table only when the query reads that table alone. Queries that join, aggregate, or group must use `k`, or put the search in a subquery with its own `LIMIT`.
+- For int8 tables, the query vector is quantized with the configured range and distances equal `vector_distance_q`.
+- The chunk scan runs on `runtime.GOMAXPROCS(0)` goroutines.
+
+### Writes
+
+`INSERT`, `UPDATE`, and `DELETE` are supported. Inserts and updates take a float32 blob; int8 tables quantize it on write, clamping values outside the configured range.
+
+### Storage
+
+Each `vector_index` table `name` uses four shadow tables in the same database:
+
+- `name_info`: dimension, storage type, quantization range, and chunk size at creation.
+- `name_chunks`: chunk id and number of occupied slots.
+- `name_data`: per chunk, a blob of little-endian int64 rowids and a blob of vectors, each with capacity for the table's chunk size. int8 chunks store raw int8 values without the quantized blob header.
+- `name_rowids`: rowid to chunk and slot.
+
+Deleting a vector moves the chunk's last vector into the freed slot, so occupied slots in every chunk are contiguous. Shadow tables are ordinary tables, so writes follow SQLite transactions. `ALTER TABLE ... RENAME` and `DROP TABLE` rename and drop the shadow tables.
+
+### Errors
+
+| Condition | Error message format |
+|---|---|
+| Unknown argument | `"vector_index: unknown argument %q, expected float32, int8, or chunk_size=N"` |
+| Invalid chunk size | `"vector_index: chunk_size must be a positive integer, got %q"` |
+| int8 without quantization | `"vector_index: int8 storage requires Register with WithQuantRange"` |
+| Dimension differs from creation | `"vector_index: table %s has dimension %d, Register was called with %d"` |
+| Storage type differs from creation | `"vector_index: table %s stores %s, declaration says %s"` |
+| Quantization range differs from creation | `"vector_index: table %s was created with quantization range [%g, %g], Register was called with [%g, %g]"` |
+| Embedding or query not a blob | `"vector_index: %s must be a float32 blob, got %v"` |
+| Embedding or query size mismatch | `"vector_index: %s: expected %d bytes (dim=%d), got %d"` |
+| Duplicate rowid | `"vector_index: UNIQUE constraint failed: %s.rowid (%d)"` |
+| Search without k or LIMIT | `"vector_index: search requires k = ? or LIMIT"` |
+| Negative k | `"vector_index: k must be non-negative, got %d"` |
 
 ## Blob Formats
 
@@ -242,6 +316,7 @@ Table-driven integration tests executed against real SQLite connections. Each te
 - **vector_distance_q**: correct distance after dequantization, format validation, not-configured error, NULL input.
 - **Round-trip**: encode -> store -> retrieve -> distance pipeline.
 - **Float32ToBlob / BlobToFloat32**: Go-level encode/decode correctness.
+- **vector_index**: search results match `vector_distance` / `vector_distance_q` brute force for `k`, `LIMIT`, `OFFSET`, and joins; results stay correct after deletes, updates, rowid changes, and rollbacks; stored embeddings read back unchanged; schema checks on reconnect; rename and drop.
 
 ## Benchmarks
 
@@ -249,11 +324,10 @@ Go benchmarks (`testing.B`) for the core operations at dimensions 384, 768, and 
 
 - `BenchmarkL2Distance_{384,768,1536}`
 - `BenchmarkQuantize_{384,768,1536}`
-- `BenchmarkDequantize_{384,768,1536}`
+- `BenchmarkL2DistanceQuantized_{384,768,1536}`
 - `BenchmarkVectorEncode_{384,768,1536}`
 
 ## Design Notes
 
-- **Extensibility**: the package is designed so that a virtual table module (via `sqlite.SetModule` / `SetModule`) could be added in the future without breaking the existing scalar function API.
 - **No CGo**: all vector math is implemented in pure Go using `encoding/binary` and `math` from the standard library.
-- **Nearest neighbor scan**: search is a brute-force scan over all rows. This is appropriate for SQLite-scale datasets (thousands to low millions of vectors). For larger datasets, users should consider a dedicated vector database.
+- **Nearest neighbor scan**: search is a brute-force scan over all rows, through either the scalar functions or `vector_index`. This is appropriate for SQLite-scale datasets (thousands to low millions of vectors). For larger datasets, users should consider a dedicated vector database.

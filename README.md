@@ -114,6 +114,59 @@ LIMIT 10;
 
 Values outside the configured range are clamped silently. Calling `vector_quantize` or `vector_distance_q` without configuring a range returns a SQL error.
 
+## Vector Index
+
+The `vector_index` virtual table is a faster alternative to `ORDER BY vector_distance(...)` for large tables. It stores vectors in chunks of about 1 MiB and scans them in Go across `GOMAXPROCS` goroutines, instead of calling a SQL function for every row.
+
+```sql
+CREATE VIRTUAL TABLE docs_vec USING vector_index();     -- float32
+CREATE VIRTUAL TABLE docs_q USING vector_index(int8);   -- quantized, requires WithQuantRange
+
+INSERT INTO docs_vec (rowid, embedding) VALUES (1, vector_encode('[0.1, 0.2, 0.3]'));
+
+-- k nearest neighbors
+SELECT rowid, distance
+FROM docs_vec
+WHERE embedding MATCH vector_encode('[0.15, 0.25, 0.35]') AND k = 5;
+
+-- LIMIT also works when the query reads only docs_vec
+SELECT rowid, distance
+FROM docs_vec
+WHERE embedding MATCH vector_encode('[0.15, 0.25, 0.35]')
+ORDER BY distance
+LIMIT 5;
+
+-- joins need k, because SQLite does not pass LIMIT through a join
+SELECT d.content, v.distance
+FROM docs_vec v
+JOIN documents d ON d.id = v.rowid
+WHERE v.embedding MATCH vector_encode('[0.15, 0.25, 0.35]') AND v.k = 5
+ORDER BY v.distance;
+```
+
+`embedding` is written and matched as a float32 blob. int8 tables quantize on write and on search using the `WithQuantRange` range, and return `vector_distance_q` distances. `UPDATE` and `DELETE` work as on a normal table.
+
+### Chunk size
+
+By default each chunk holds about 1 MiB of vector data: 2048 float32 vectors at 128 dimensions, 170 at 1536. `chunk_size=N` sets the number of vectors per chunk when the table is created:
+
+```sql
+CREATE VIRTUAL TABLE docs_vec USING vector_index(float32, chunk_size=512);
+```
+
+Larger chunks mean fewer SQLite rows to read per search, but writes into a chunk slow down as it grows. Measured on Apple M3 Max at 128, 768, and 1536 dimensions:
+
+| Vector data per chunk | Insert, vs 1 MiB | Search p50, vs 1 MiB |
+|---|---|---|
+| 64 KiB | up to 6 µs per row faster; 10 µs slower for float32 at 768 dimensions | 14-133% slower |
+| 256 KiB | up to 5 µs per row faster | 10-46% slower for float32; int8 within 10% |
+| 1 MiB (default) | | |
+| 4 MiB | 4.5-16x slower | at most 4% faster |
+
+The chunk size cannot be changed after creation; copy the rows into a new table to change it.
+
+The table keeps its data in ordinary shadow tables (`docs_vec_info`, `docs_vec_chunks`, `docs_vec_data`, `docs_vec_rowids`), so writes follow SQLite transactions. Reopening a database with a different dimension or quantization range than the table was created with returns an error.
+
 ## Embedding
 
 Optional `vector_embed` function converts text to embeddings inside SQL. Provide an `Embedder` implementation via `WithEmbedder`:
@@ -167,7 +220,7 @@ Each row returned by `vector_chunk` has a `value` (the chunk text) and a `chunk_
 
 ## Design
 
-- **Brute-force scan**: search is a linear scan over all rows, appropriate for SQLite-scale datasets (thousands to low millions of vectors).
+- **Brute-force scan**: search is a linear scan over all rows, through the scalar functions or `vector_index`, appropriate for SQLite-scale datasets (thousands to low millions of vectors).
 - **Pure Go**: all vector math uses `encoding/binary` and `math` from the standard library.
 - **Single package**: everything lives in package `vector` at the module root. All internals are unexported.
 
@@ -177,19 +230,54 @@ Each row returned by `vector_chunk` has a `value` (the chunk text) and a `chunk_
 go test -bench=. -benchmem ./...
 ```
 
-Results on Apple M3 Max:
+Results on Apple M3 Max. Distance benchmarks operate on encoded blobs, as the SQL functions do:
 
 ```
-BenchmarkL2Distance/dim=384     10429109    115.1 ns/op     0 B/op    0 allocs/op
-BenchmarkL2Distance/dim=768      5440725    221.4 ns/op     0 B/op    0 allocs/op
-BenchmarkL2Distance/dim=1536     2768809    434.3 ns/op     0 B/op    0 allocs/op
-BenchmarkQuantize/dim=384        2386230    504.5 ns/op   416 B/op    1 allocs/op
-BenchmarkQuantize/dim=768        1000000   1001   ns/op   896 B/op    1 allocs/op
-BenchmarkQuantize/dim=1536        606144   1974   ns/op  1792 B/op    1 allocs/op
-BenchmarkDequantize/dim=384      2781045    439.3 ns/op  1536 B/op    1 allocs/op
-BenchmarkDequantize/dim=768      1607391    739.0 ns/op  3072 B/op    1 allocs/op
-BenchmarkDequantize/dim=1536      788222   1473   ns/op  6144 B/op    1 allocs/op
+BenchmarkL2Distance/dim=384            4908330     241.5 ns/op     0 B/op    0 allocs/op
+BenchmarkL2Distance/dim=768            2496775     483.3 ns/op     0 B/op    0 allocs/op
+BenchmarkL2Distance/dim=1536           1246688     965.9 ns/op     0 B/op    0 allocs/op
+BenchmarkQuantize/dim=384              2521759     477.5 ns/op   416 B/op    1 allocs/op
+BenchmarkQuantize/dim=768              1269049     944.5 ns/op   896 B/op    1 allocs/op
+BenchmarkQuantize/dim=1536              630952    1889   ns/op  1792 B/op    1 allocs/op
+BenchmarkL2DistanceQuantized/dim=384  11420806     104.5 ns/op     0 B/op    0 allocs/op
+BenchmarkL2DistanceQuantized/dim=768   5961984     201.5 ns/op     0 B/op    0 allocs/op
+BenchmarkL2DistanceQuantized/dim=1536  3041773     398.2 ns/op     0 B/op    0 allocs/op
 ```
+
+### SIFT1M
+
+[SIFT1M](http://corpus-texmex.irisa.fr/) is a standard nearest-neighbor benchmark: 1,000,000 base vectors and 10,000 query vectors, 128 dimensions, L2 distance, with published ground-truth neighbors. The first 100 queries run with k=100 against an on-disk database with default SQLite settings. Every implementation searches on one thread except `vector_index`, which uses all 14 cores of the test machine.
+
+```
+curl -O ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz
+mkdir -p .tmp && tar xzf sift.tar.gz -C .tmp
+go test -tags sift -run TestSIFT1M -timeout 0 -v -sift.dir .tmp/sift
+uv run bench/sift_compare.py .tmp/sift 100
+```
+
+Results on Apple M3 Max, macOS 15.7, Go 1.24.12. Build time is the time to insert all vectors (HNSW builds use all cores).
+
+| Implementation | Search | Build | p50 | QPS | Recall@10 | Recall@100 |
+|---|---|---|---|---|---|---|
+| go-sqlite-vector `vector_distance` | exact scan | 2.6s | 385 ms | 2.6 | 0.999 | 1.000 |
+| go-sqlite-vector `vector_distance_q` (int8) | quantized scan | +3.3s | 347 ms | 2.9 | 0.983 | 0.988 |
+| go-sqlite-vector `vector_index` | exact chunk scan | 13.6s | 145 ms | 6.7 | 0.999 | 1.000 |
+| go-sqlite-vector `vector_index(int8)` | quantized chunk scan | 13.6s | 39 ms | 25.0 | 0.983 | 0.988 |
+| sqlite-vec 0.1.9 `vec_distance_l2` | exact scan | 1.4s | 306 ms | 3.3 | 0.999 | 1.000 |
+| sqlite-vec 0.1.9 `vec0` | exact scan | 4.4s | 143 ms | 6.9 | 0.999 | 1.000 |
+| FAISS 1.15 `IndexFlatL2` | exact, in memory | 0.0s | 7.9 ms | 125 | 0.999 | 1.000 |
+| FAISS 1.15 HNSW M=16 ef=512 | approximate | 28.7s | 0.91 ms | 1,121 | 0.999 | 0.999 |
+| hnswlib 0.8 M=16 ef=512 | approximate | 46.8s | 1.22 ms | 852 | 0.999 | 0.998 |
+
+Exact recall@10 is 0.999 rather than 1.000 because the ground truth contains tied distances. The int8 column stores 130 bytes per vector instead of 512.
+
+Scans read the whole table through SQLite's pager. Memory-mapping the database file avoids a `pread` system call per page and speeds up scans of large tables. Set the size to at least the database file size:
+
+```sql
+PRAGMA mmap_size = 4294967296; -- 4 GiB
+```
+
+With this setting, SIFT1M p50 latency drops to 248 ms for `vector_distance`, 287 ms for `vector_distance_q`, 64 ms for `vector_index`, and 17 ms for `vector_index(int8)`. The comparison table above uses default settings for every SQLite implementation.
 
 ## License
 
