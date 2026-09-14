@@ -207,7 +207,7 @@ Results on Apple M3 Max, macOS 15.7, Go 1.24.12. Build time is the time to inser
 | Implementation | Search | Build | p50 | QPS | Recall@10 | Recall@100 |
 |---|---|---|---|---|---|---|
 | go-sqlite-vector `vector_distance` | exact scan | 2.3s | 733 ms | 1.4 | 0.999 | 1.000 |
-| go-sqlite-vector `vector_distance_q` (int8) | exact scan | +3.0s | 659 ms | 1.5 | 0.983 | 0.988 |
+| go-sqlite-vector `vector_distance_q` (int8) | quantized scan | +3.0s | 659 ms | 1.5 | 0.983 | 0.988 |
 | sqlite-vec 0.1.9 `vec_distance_l2` | exact scan | 1.4s | 306 ms | 3.3 | 0.999 | 1.000 |
 | sqlite-vec 0.1.9 `vec0` | exact scan | 4.4s | 143 ms | 6.9 | 0.999 | 1.000 |
 | FAISS 1.15 `IndexFlatL2` | exact, in memory | 0.0s | 7.9 ms | 125 | 0.999 | 1.000 |
