@@ -114,7 +114,15 @@ Computes squared L2 distance between the dequantized forms of two quantized int8
 CREATE VIRTUAL TABLE docs_vec USING vector_index();       -- float32 storage
 CREATE VIRTUAL TABLE docs_vec USING vector_index(float32); -- same
 CREATE VIRTUAL TABLE docs_vec USING vector_index(int8);    -- quantized storage
+CREATE VIRTUAL TABLE docs_vec USING vector_index(int8, chunk_size=4096);
 ```
+
+Arguments are comma-separated and may appear in any order:
+
+- `float32` (default) or `int8`: storage type.
+- `chunk_size=N`: vectors per chunk, a positive integer. When omitted, `N = max(1, 1048576 / vectorBytes)`, where `vectorBytes` is `dim * 4` for float32 and `dim` for int8, so each chunk holds about 1 MiB of vector data.
+
+The storage type and chunk size are fixed when the table is created and read from the `name_info` shadow table on later connections.
 
 Columns:
 
@@ -149,9 +157,9 @@ SELECT rowid, distance FROM docs_vec WHERE embedding MATCH ?1 ORDER BY distance 
 
 Each `vector_index` table `name` uses four shadow tables in the same database:
 
-- `name_info`: dimension, storage type, and quantization range at creation.
+- `name_info`: dimension, storage type, quantization range, and chunk size at creation.
 - `name_chunks`: chunk id and number of occupied slots.
-- `name_data`: per chunk, a blob of little-endian int64 rowids and a blob of vectors, each with capacity for 1024 entries. int8 chunks store raw int8 values without the quantized blob header.
+- `name_data`: per chunk, a blob of little-endian int64 rowids and a blob of vectors, each with capacity for the table's chunk size. int8 chunks store raw int8 values without the quantized blob header.
 - `name_rowids`: rowid to chunk and slot.
 
 Deleting a vector moves the chunk's last vector into the freed slot, so occupied slots in every chunk are contiguous. Shadow tables are ordinary tables, so writes follow SQLite transactions. `ALTER TABLE ... RENAME` and `DROP TABLE` rename and drop the shadow tables.
@@ -160,7 +168,8 @@ Deleting a vector moves the chunk's last vector into the freed slot, so occupied
 
 | Condition | Error message format |
 |---|---|
-| Unknown storage type | `"vector_index: unknown storage type %q, expected float32 or int8"` |
+| Unknown argument | `"vector_index: unknown argument %q, expected float32, int8, or chunk_size=N"` |
+| Invalid chunk size | `"vector_index: chunk_size must be a positive integer, got %q"` |
 | int8 without quantization | `"vector_index: int8 storage requires Register with WithQuantRange"` |
 | Dimension differs from creation | `"vector_index: table %s has dimension %d, Register was called with %d"` |
 | Storage type differs from creation | `"vector_index: table %s stores %s, declaration says %s"` |

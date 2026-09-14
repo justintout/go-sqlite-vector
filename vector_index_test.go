@@ -2,6 +2,7 @@ package vector
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,9 +11,12 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
-// indexTestRows spans more than two chunks so searches, deletes, and slot
-// moves cross chunk boundaries.
-const indexTestRows = 2*indexChunkCapacity + 500
+// indexTestRows spans more than two chunks of indexTestChunkSize so searches,
+// deletes, and slot moves cross chunk boundaries.
+const (
+	indexTestChunkSize = 1024
+	indexTestRows      = 2*indexTestChunkSize + 500
+)
 
 func indexTestVector(i int) []float32 {
 	return []float32{float32(i % 97), float32(i % 89), float32(i % 83), float32(i % 79)}
@@ -54,7 +58,7 @@ func openIndexTestConn(t *testing.T, storage string) *sqlite.Conn {
 	if err := Register(conn, 4, WithQuantRange(0, 100)); err != nil {
 		t.Fatal(err)
 	}
-	execArgs(t, conn, "CREATE VIRTUAL TABLE idx USING vector_index("+storage+")")
+	execArgs(t, conn, fmt.Sprintf("CREATE VIRTUAL TABLE idx USING vector_index(%s, chunk_size=%d)", storage, indexTestChunkSize))
 	execArgs(t, conn, "CREATE TABLE ref (id INTEGER PRIMARY KEY, e BLOB, q BLOB)")
 	execArgs(t, conn, "BEGIN")
 	for i := range indexTestRows {
@@ -233,9 +237,19 @@ func TestVectorIndexErrors(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "unknown storage type",
+			name:    "unknown argument",
 			query:   "CREATE VIRTUAL TABLE bad USING vector_index(float64)",
-			wantErr: `unknown storage type "float64"`,
+			wantErr: `unknown argument "float64"`,
+		},
+		{
+			name:    "zero chunk_size",
+			query:   "CREATE VIRTUAL TABLE bad USING vector_index(chunk_size=0)",
+			wantErr: `chunk_size must be a positive integer, got "0"`,
+		},
+		{
+			name:    "non-integer chunk_size",
+			query:   "CREATE VIRTUAL TABLE bad USING vector_index(chunk_size=big)",
+			wantErr: `chunk_size must be a positive integer, got "big"`,
 		},
 		{
 			name:    "int8 without quantization range",
@@ -307,6 +321,47 @@ func TestVectorIndexErrors(t *testing.T) {
 			if tt.setup != "noquant" {
 				rows := queryRows(t, conn, "SELECT rowid, 0 FROM idx ORDER BY rowid")
 				assertRowsEqual(t, rows, []indexRow{{0, 0}, {1, 0}})
+			}
+		})
+	}
+}
+
+func TestVectorIndexChunkSize(t *testing.T) {
+	tests := []struct {
+		name string
+		dim  int
+		args string
+		want int
+	}{
+		{name: "float32 default at dim 4", dim: 4, args: "", want: 65536},
+		{name: "int8 default at dim 4", dim: 4, args: "int8", want: 262144},
+		{name: "float32 default at dim 1536", dim: 1536, args: "float32", want: 170},
+		{name: "int8 default at dim 1536", dim: 1536, args: "int8", want: 682},
+		{name: "default when vector exceeds target", dim: 300000, args: "float32", want: 1},
+		{name: "explicit chunk_size", dim: 4, args: "chunk_size = 7", want: 7},
+		{name: "explicit chunk_size with storage type", dim: 4, args: "int8, chunk_size=7", want: 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := openTestConn(t)
+			if err := Register(conn, tt.dim, WithQuantRange(0, 100)); err != nil {
+				t.Fatal(err)
+			}
+			execArgs(t, conn, "CREATE VIRTUAL TABLE idx USING vector_index("+tt.args+")")
+			rows := queryRows(t, conn, "SELECT chunk_size, 0 FROM idx_info")
+			if len(rows) != 1 || rows[0].id != int64(tt.want) {
+				t.Fatalf("chunk_size = %+v, want %d", rows, tt.want)
+			}
+			if tt.want != 7 {
+				return
+			}
+			v := Float32ToBlob([]float32{1, 2, 3, 4})
+			for i := range 20 {
+				execArgs(t, conn, "INSERT INTO idx (rowid, embedding) VALUES (?, ?)", i, v)
+			}
+			rows = queryRows(t, conn, "SELECT count(*), max(size) FROM idx_chunks")
+			if len(rows) != 1 || rows[0] != (indexRow{3, 7}) {
+				t.Fatalf("chunks (count, max size) = %+v, want (3, 7)", rows)
 			}
 		})
 	}

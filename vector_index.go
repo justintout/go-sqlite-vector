@@ -6,6 +6,7 @@ import (
 	"io"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -13,10 +14,16 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
-// indexChunkCapacity is the number of vectors stored in each chunk row.
-// Searches read whole chunks, so larger chunks mean fewer SQLite rows to
-// step through per query.
-const indexChunkCapacity = 1024
+// indexChunkTargetBytes is the default amount of vector data per chunk.
+// Searches read whole chunks, so larger chunks mean fewer SQLite rows per
+// query, but writes into a chunk get slower as it grows. A sweep over 128 to
+// 1536 dimensions found searches fastest near 1 MiB, and inserts 4.5-16x
+// slower at 4 MiB than at 1 MiB.
+const indexChunkTargetBytes = 1 << 20
+
+func defaultChunkCapacity(vectorBytes int) int {
+	return max(1, indexChunkTargetBytes/vectorBytes)
+}
 
 const (
 	indexColEmbedding = iota
@@ -34,6 +41,7 @@ type vectorIndex struct {
 	conn      *sqlite.Conn
 	cfg       *config
 	quantized bool
+	capacity  int
 	db        string
 	name      string
 }
@@ -41,19 +49,31 @@ type vectorIndex struct {
 func indexConnect(cfg *config, create bool) sqlite.VTableConnectFunc {
 	return func(conn *sqlite.Conn, opts *sqlite.VTableConnectOptions) (sqlite.VTable, *sqlite.VTableConfig, error) {
 		vi := &vectorIndex{conn: conn, cfg: cfg, db: opts.DatabaseName, name: opts.VTableName}
-		arg := strings.TrimSpace(strings.Join(opts.Args, ","))
-		switch arg {
-		case "", "float32":
-		case "int8":
-			vi.quantized = true
-		default:
-			return nil, nil, fmt.Errorf("vector_index: unknown storage type %q, expected float32 or int8", arg)
+		for _, arg := range opts.Args {
+			arg = strings.TrimSpace(arg)
+			key, val, hasVal := strings.Cut(arg, "=")
+			switch {
+			case arg == "" && len(opts.Args) == 1, arg == "float32":
+			case arg == "int8":
+				vi.quantized = true
+			case hasVal && strings.TrimSpace(key) == "chunk_size":
+				n, err := strconv.Atoi(strings.TrimSpace(val))
+				if err != nil || n < 1 {
+					return nil, nil, fmt.Errorf("vector_index: chunk_size must be a positive integer, got %q", strings.TrimSpace(val))
+				}
+				vi.capacity = n
+			default:
+				return nil, nil, fmt.Errorf("vector_index: unknown argument %q, expected float32, int8, or chunk_size=N", arg)
+			}
 		}
 		if vi.quantized && !cfg.quantEnabled {
 			return nil, nil, fmt.Errorf("vector_index: int8 storage requires Register with WithQuantRange")
 		}
 		var err error
 		if create {
+			if vi.capacity == 0 {
+				vi.capacity = defaultChunkCapacity(vi.vectorSize())
+			}
 			err = vi.create()
 		} else {
 			err = vi.check()
@@ -104,8 +124,8 @@ func (vi *vectorIndex) create() error {
 		query string
 		args  []any
 	}{
-		{"CREATE TABLE " + vi.shadow("info") + " (dim INTEGER NOT NULL, type TEXT NOT NULL, quant_min REAL, quant_max REAL)", nil},
-		{"INSERT INTO " + vi.shadow("info") + " VALUES (?, ?, ?, ?)", []any{vi.cfg.dim, vi.storageType(), qmin, qmax}},
+		{"CREATE TABLE " + vi.shadow("info") + " (dim INTEGER NOT NULL, type TEXT NOT NULL, quant_min REAL, quant_max REAL, chunk_size INTEGER NOT NULL)", nil},
+		{"INSERT INTO " + vi.shadow("info") + " VALUES (?, ?, ?, ?, ?)", []any{vi.cfg.dim, vi.storageType(), qmin, qmax, vi.capacity}},
 		// Chunk sizes live apart from chunk data because updating any column
 		// rewrites the whole row, blobs included. UNIQUE (size, id) indexes
 		// size for finding a chunk with free slots; SQLite's automatic index
@@ -127,13 +147,14 @@ func (vi *vectorIndex) check() error {
 	var dim int
 	var typ string
 	var qmin, qmax float32
-	err := sqlitex.Execute(vi.conn, "SELECT dim, type, quant_min, quant_max FROM "+vi.shadow("info"), &sqlitex.ExecOptions{
+	err := sqlitex.Execute(vi.conn, "SELECT dim, type, quant_min, quant_max, chunk_size FROM "+vi.shadow("info"), &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			found = true
 			dim = stmt.ColumnInt(0)
 			typ = stmt.ColumnText(1)
 			qmin = float32(stmt.ColumnFloat(2))
 			qmax = float32(stmt.ColumnFloat(3))
+			vi.capacity = stmt.ColumnInt(4)
 			return nil
 		},
 	})
@@ -365,7 +386,7 @@ func (vi *vectorIndex) insert(rowid sqlite.Value, vec []byte) (int64, error) {
 	var size int
 	var found bool
 	err := sqlitex.Execute(vi.conn, "SELECT id, size FROM "+vi.shadow("chunks")+" WHERE size < ? LIMIT 1", &sqlitex.ExecOptions{
-		Args: []any{indexChunkCapacity},
+		Args: []any{vi.capacity},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			chunk, size, found = stmt.ColumnInt64(0), stmt.ColumnInt(1), true
 			return nil
@@ -380,7 +401,7 @@ func (vi *vectorIndex) insert(rowid sqlite.Value, vec []byte) (int64, error) {
 		}
 		chunk = vi.conn.LastInsertRowID()
 		err := vi.exec("INSERT INTO "+vi.shadow("data")+" (id, ids, vectors) VALUES (?, zeroblob(?), zeroblob(?))",
-			chunk, indexChunkCapacity*8, indexChunkCapacity*vi.vectorSize())
+			chunk, vi.capacity*8, vi.capacity*vi.vectorSize())
 		if err != nil {
 			return 0, err
 		}

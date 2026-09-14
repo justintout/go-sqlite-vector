@@ -116,7 +116,7 @@ Values outside the configured range are clamped silently. Calling `vector_quanti
 
 ## Vector Index
 
-The `vector_index` virtual table is a faster alternative to `ORDER BY vector_distance(...)` for large tables. It stores vectors in chunks of 1024 and scans them in Go across `GOMAXPROCS` goroutines, instead of calling a SQL function for every row.
+The `vector_index` virtual table is a faster alternative to `ORDER BY vector_distance(...)` for large tables. It stores vectors in chunks of about 1 MiB and scans them in Go across `GOMAXPROCS` goroutines, instead of calling a SQL function for every row.
 
 ```sql
 CREATE VIRTUAL TABLE docs_vec USING vector_index();     -- float32
@@ -145,6 +145,25 @@ ORDER BY v.distance;
 ```
 
 `embedding` is written and matched as a float32 blob. int8 tables quantize on write and on search using the `WithQuantRange` range, and return `vector_distance_q` distances. `UPDATE` and `DELETE` work as on a normal table.
+
+### Chunk size
+
+By default each chunk holds about 1 MiB of vector data: 2048 float32 vectors at 128 dimensions, 170 at 1536. `chunk_size=N` sets the number of vectors per chunk when the table is created:
+
+```sql
+CREATE VIRTUAL TABLE docs_vec USING vector_index(float32, chunk_size=512);
+```
+
+Larger chunks mean fewer SQLite rows to read per search, but writes into a chunk slow down as it grows. Measured on Apple M3 Max at 128, 768, and 1536 dimensions:
+
+| Vector data per chunk | Insert, vs 1 MiB | Search p50, vs 1 MiB |
+|---|---|---|
+| 64 KiB | up to 6 µs per row faster; 10 µs slower for float32 at 768 dimensions | 14-133% slower |
+| 256 KiB | up to 5 µs per row faster | 10-46% slower for float32; int8 within 10% |
+| 1 MiB (default) | | |
+| 4 MiB | 4.5-16x slower | at most 4% faster |
+
+The chunk size cannot be changed after creation; copy the rows into a new table to change it.
 
 The table keeps its data in ordinary shadow tables (`docs_vec_info`, `docs_vec_chunks`, `docs_vec_data`, `docs_vec_rowids`), so writes follow SQLite transactions. Reopening a database with a different dimension or quantization range than the table was created with returns an error.
 
@@ -240,10 +259,10 @@ Results on Apple M3 Max, macOS 15.7, Go 1.24.12. Build time is the time to inser
 
 | Implementation | Search | Build | p50 | QPS | Recall@10 | Recall@100 |
 |---|---|---|---|---|---|---|
-| go-sqlite-vector `vector_distance` | exact scan | 2.5s | 363 ms | 2.7 | 0.999 | 1.000 |
-| go-sqlite-vector `vector_distance_q` (int8) | quantized scan | +3.3s | 336 ms | 2.9 | 0.983 | 0.988 |
-| go-sqlite-vector `vector_index` | exact chunk scan | 9.8s | 139 ms | 6.9 | 0.999 | 1.000 |
-| go-sqlite-vector `vector_index(int8)` | quantized chunk scan | 6.5s | 46 ms | 20.9 | 0.983 | 0.988 |
+| go-sqlite-vector `vector_distance` | exact scan | 2.6s | 385 ms | 2.6 | 0.999 | 1.000 |
+| go-sqlite-vector `vector_distance_q` (int8) | quantized scan | +3.3s | 347 ms | 2.9 | 0.983 | 0.988 |
+| go-sqlite-vector `vector_index` | exact chunk scan | 13.6s | 145 ms | 6.7 | 0.999 | 1.000 |
+| go-sqlite-vector `vector_index(int8)` | quantized chunk scan | 13.6s | 39 ms | 25.0 | 0.983 | 0.988 |
 | sqlite-vec 0.1.9 `vec_distance_l2` | exact scan | 1.4s | 306 ms | 3.3 | 0.999 | 1.000 |
 | sqlite-vec 0.1.9 `vec0` | exact scan | 4.4s | 143 ms | 6.9 | 0.999 | 1.000 |
 | FAISS 1.15 `IndexFlatL2` | exact, in memory | 0.0s | 7.9 ms | 125 | 0.999 | 1.000 |
@@ -258,7 +277,7 @@ Scans read the whole table through SQLite's pager. Memory-mapping the database f
 PRAGMA mmap_size = 4294967296; -- 4 GiB
 ```
 
-With this setting, SIFT1M p50 latency drops to 243 ms for `vector_distance`, 282 ms for `vector_distance_q`, 64 ms for `vector_index`, and 24 ms for `vector_index(int8)`. The comparison table above uses default settings for every SQLite implementation.
+With this setting, SIFT1M p50 latency drops to 248 ms for `vector_distance`, 287 ms for `vector_distance_q`, 64 ms for `vector_index`, and 17 ms for `vector_index(int8)`. The comparison table above uses default settings for every SQLite implementation.
 
 ## License
 
